@@ -1,0 +1,163 @@
+# ULX3S (ECP5, caBGA381) pin constraints, wired to the interface board's J2.
+#
+# THREE hops, and every one of them is written down rather than remembered:
+#
+#   1. interface board net -> its J2 pin      ../../HARDWARE.md
+#   2. interface J2 pin    -> ULX3S J2 pin    carrier/ULX3S-ADAPTER.md
+#   3. ULX3S GP/GN name    -> ECP5 ball       emard ulx3s_v20.lpf
+#
+# Hop 3 comes from emard's ulx3s_v20.lpf, not typed from memory: a guess that
+# lands on a real but wrong ball programs cleanly and the board does nothing.
+#
+# That file is for board revision v2.0. Several GP/GN balls MOVED between
+# revisions (its own comments record E15->C15, C15->E14, D15->B15, B15->D14).
+# If this board is not a v2.x, re-extract hop 3 rather than editing it.
+#
+# Build:
+#   yosys -p 'read_verilog <src>; synth_ecp5 -top top -json profile_emu.json'
+#   nextpnr-ecp5 --25k --package CABGA381 --json profile_emu.json \
+#                --lpf constraints/ulx3s.lpf --textcfg profile_emu.config
+#   ecppack profile_emu.config profile_emu.bit
+#   openFPGALoader -b ulx3s profile_emu.bit
+#
+# --25k, not --12k, EVEN ON A BOARD SOLD AS A 12F: the ULX3S 12F carries 25F
+# silicon and targeting it as a 25F is standard practice for this board. The
+# usable fabric is 24288 LUT4, not 12144.
+
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+# --- on-board, not through J2 ----------------------------------------------
+# 25 MHz. src/top.v's PLL takes 25 in and puts 50 out, so clk_sys is 50 MHz
+# and every CLK_HZ constant in the design (SD dividers, token timeouts, UART
+# baud, reporter, verifier) keeps its value.
+LOCATE COMP "clk"    SITE "G2";
+IOBUF  PORT "clk"    PULLMODE=NONE IO_TYPE=LVCMOS33;
+
+# FIRE1, pulled DOWN, so it reads 0 idle and 1 pressed. top.v wants rst_n, so
+# the wrapper inverts it. btn[0] is BTN_PWRn and its sense is documented as
+# "inverted logic", which is too ambiguous to build a reset on.
+LOCATE COMP "rst_n"  SITE "R1";
+IOBUF  PORT "rst_n"  PULLMODE=DOWN IO_TYPE=LVCMOS33;
+
+# FPGA transmits to the FTDI, so the FPGA's TX output is the net called
+# ftdi_rxd. Only TX is used.
+LOCATE COMP "usb_tx" SITE "L4";
+IOBUF  PORT "usb_tx" PULLMODE=UP IO_TYPE=LVCMOS33 DRIVE=4;
+
+# The FTDI's transmit into the FPGA: the bench command channel (uart_rx).
+LOCATE COMP "usb_rx" SITE "M1";
+IOBUF  PORT "usb_rx" PULLMODE=UP IO_TYPE=LVCMOS33;
+
+LOCATE COMP "led[0]" SITE "B2";
+LOCATE COMP "led[1]" SITE "C2";
+LOCATE COMP "led[2]" SITE "C1";
+LOCATE COMP "led[3]" SITE "D2";
+LOCATE COMP "led[4]" SITE "D1";
+LOCATE COMP "led[5]" SITE "E2";
+LOCATE COMP "led[6]" SITE "E1";
+LOCATE COMP "led[7]" SITE "H3";
+IOBUF  PORT "led[0]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[1]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[2]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[3]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[4]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[5]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[6]" IO_TYPE=LVCMOS33 DRIVE=4;
+IOBUF  PORT "led[7]" IO_TYPE=LVCMOS33 DRIVE=4;
+
+# --- HOW THIS MAP WAS CHOSEN -----------------------------------------------
+# The two headers FACE each other, so their numbering runs in opposite
+# directions: interface J2.1 sits nearest ULX3S pin 79, and J2.35 nearest pin
+# 41. A wire is therefore its shortest when x_ulx3s(p) == x_if(q), which works
+# out to p + q = 20.
+#
+# Every signal whose aligned position exists is placed there, so 22 of the 25
+# wires run straight across. Only three cannot, because their aligned position
+# lands on a ULX3S power pin: IF J2.18 (PD7), J2.35 (SD_CD) and J2.36 (SD_WP).
+# SD_WP is given the long run of the three because it is a mechanical switch
+# contact that never toggles, and HONOR_WP is 0.
+#
+# Columns: ECP5 ball / ULX3S signal / ULX3S J2 board pin / interface J2 pin.
+
+# --- GP row: the interface board's even pins -------------------------------
+# Bit order is not free: PD7 goes to DB-25 pin 13 and PD0 to DB-25 pin 5. See
+# the data-bus mapping table in ../../HARDWARE.md. The byte reads high-to-low
+# across the connector here, which is the facing orientation, not a mistake.
+LOCATE COMP "pd[0]"  SITE "D13";  # GP27  J2.76  IF J2.4   DB-25 5
+LOCATE COMP "pd[1]"  SITE "B13";  # GP26  J2.74  IF J2.6   DB-25 6
+LOCATE COMP "pd[2]"  SITE "D14";  # GP25  J2.72  IF J2.8   DB-25 8
+LOCATE COMP "pd[3]"  SITE "C16";  # GP24  J2.70  IF J2.10  DB-25 22
+LOCATE COMP "pd[4]"  SITE "B17";  # GP23  J2.68  IF J2.12  DB-25 23
+LOCATE COMP "pd[5]"  SITE "B15";  # GP22  J2.66  IF J2.14  DB-25 11
+LOCATE COMP "pd[6]"  SITE "C18";  # GP21  J2.64  IF J2.16  DB-25 12
+LOCATE COMP "pd[7]"  SITE "C15";  # GN22  J2.65  IF J2.18  DB-25 13  <- see note
+IOBUF  PORT "pd[0]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[1]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[2]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[3]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[4]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[5]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[6]"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pd[7]"  IO_TYPE=LVCMOS33 DRIVE=8;
+# PD7 is the only data bit on the GN row. Its aligned position (p=11) is a
+# ULX3S power pin, and the GP row is full at 14 of 14, so it has nowhere else
+# to be. Seven bits sit in BANK1 and PD6 in BANK2/BANK3; at ProFile byte rates
+# the bank difference is far below anything that matters.
+
+# Host-driven lines, through U2.
+LOCATE COMP "pcmd_n"   SITE "D18";  # GP20  J2.58  IF J2.22  DB-25 17
+LOCATE COMP "pstrb_n"  SITE "F17";  # GP19  J2.56  IF J2.24  DB-25 15
+LOCATE COMP "prw"      SITE "H18";  # GP18  J2.54  IF J2.26  DB-25 3
+LOCATE COMP "pres_n"   SITE "L16";  # GP17  J2.52  IF J2.28  DB-25 21
+IOBUF  PORT "pcmd_n"   PULLMODE=NONE IO_TYPE=LVCMOS33;
+IOBUF  PORT "pstrb_n"  PULLMODE=NONE IO_TYPE=LVCMOS33;
+IOBUF  PORT "prw"      PULLMODE=NONE IO_TYPE=LVCMOS33;
+IOBUF  PORT "pres_n"   PULLMODE=NONE IO_TYPE=LVCMOS33;
+
+# Shared with SmartPort, host-driven inputs through U2.
+LOCATE COMP "ph0"      SITE "N16";  # GP16  J2.50  IF J2.30  DB-25 1 = /PH0
+LOCATE COMP "aux7"     SITE "N17";  # GP15  J2.48  IF J2.32  DB-25 7 = SmartPort /ENABLE1
+IOBUF  PORT "ph0"      PULLMODE=NONE IO_TYPE=LVCMOS33;
+IOBUF  PORT "aux7"     PULLMODE=NONE IO_TYPE=LVCMOS33;
+
+# The only microSD line on the GP row, and it is aligned: IF J2.34 faces GP14.
+LOCATE COMP "sd_cs_n"  SITE "U18";  # GP14  J2.46  IF J2.34
+IOBUF  PORT "sd_cs_n"  IO_TYPE=LVCMOS33 DRIVE=8;
+
+# --- GN row: the interface board's odd pins, plus PD7 and SD_WP ------------
+LOCATE COMP "xcvr_dir"   SITE "E13";  # GN27  J2.75  IF J2.3
+LOCATE COMP "xcvr_oe_n"  SITE "C13";  # GN26  J2.73  IF J2.5
+IOBUF  PORT "xcvr_dir"   IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "xcvr_oe_n"  IO_TYPE=LVCMOS33 DRIVE=8;
+
+LOCATE COMP "sd_clk"   SITE "E17";  # GN20  J2.57  IF J2.21
+LOCATE COMP "pbsy_n"   SITE "G18";  # GN19  J2.55  IF J2.23  DB-25 16
+LOCATE COMP "sd_mosi"  SITE "H17";  # GN18  J2.53  IF J2.25   socket DI
+LOCATE COMP "pparity"  SITE "L17";  # GN17  J2.51  IF J2.27  DB-25 18, both directions
+LOCATE COMP "sd_miso"  SITE "M17";  # GN16  J2.49  IF J2.29   socket DO
+LOCATE COMP "pchk"     SITE "P16";  # GN15  J2.47  IF J2.31  DB-25 25, grounded = present
+LOCATE COMP "sd_cd_n"  SITE "U17";  # GN14  J2.45  IF J2.35   card detect, one position over
+LOCATE COMP "sd_wp_n"  SITE "D17";  # GN21  J2.63  IF J2.36   the long wire; see the note above
+IOBUF  PORT "sd_clk"   IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pbsy_n"   IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "sd_mosi"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "pparity"  IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "sd_miso"  PULLMODE=UP IO_TYPE=LVCMOS33;
+IOBUF  PORT "pchk"     IO_TYPE=LVCMOS33 DRIVE=8;
+IOBUF  PORT "sd_cd_n"  PULLMODE=UP IO_TYPE=LVCMOS33;
+IOBUF  PORT "sd_wp_n"  PULLMODE=UP IO_TYPE=LVCMOS33;
+
+# usb_tx_alt exists only for the iCE40 reference arm; the ECP5 build drives it
+# constant-high. Parked on spare GN23 so this file stays strict about ports
+# that appear by accident.
+LOCATE COMP "usb_tx_alt" SITE "C17";  # GN23  J2.67  spare
+IOBUF  PORT "usb_tx_alt" IO_TYPE=LVCMOS33 DRIVE=4;
+
+# --- spare GN pins ----------------------------------------------------------
+#   GN23  C17   J2.67   <- taken by usb_tx_alt above (idle-high, never toggles)
+#   GN24  D16   J2.69
+#   GN25  E14   J2.71
+#
+# NOT constrained here: leaving them out means nextpnr will refuse a design
+# that starts using one by accident, which is the behavior wanted.

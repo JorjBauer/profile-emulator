@@ -1,0 +1,9 @@
+# Build products. `make clean` removes all of these.
+# The selector blobs are derived from ../selector/selector_blobs.h on demand.
+src/blobs/*.hex
+.build_id
+profile_emu_*.json
+profile_emu_*.config
+profile_emu_*.bit
+# Editor backups
+*~
