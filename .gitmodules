@@ -1,0 +1,3 @@
+[submodule "teensy/selector"]
+	path = teensy/selector
+	url = https://github.com/JorjBauer/profile-selector.git
