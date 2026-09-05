@@ -7,3 +7,17 @@ profile_emu_*.config
 profile_emu_*.bit
 # Editor backups
 *~
+
+# KiCad backups. The hand snapshots taken before each risky layout edit, plus
+# KiCad's own auto-backups. None of them are the board; hw/profile-drive.kicad_pcb is.
+*.kicad_pcb.bak-*
+*.kicad_pro.bak-*
+*.kicad_sch.bak-*
+*.kicad_sym.bak-*
+*-backups/
+*.kicad_pcb-bak
+hw/pre-regen-backup/
+
+# Schematic generator. Transient tooling: it produced the KiCad sheets once and
+# is not part of the archive. Kept on disk, never committed.
+hw/gen/
