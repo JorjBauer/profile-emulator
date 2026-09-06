@@ -21,3 +21,9 @@ hw/pre-regen-backup/
 # Schematic generator. Transient tooling: it produced the KiCad sheets once and
 # is not part of the archive. Kept on disk, never committed.
 hw/gen/
+hw/gerb/
+hw/stencil/
+hw/profile-drive-drc.txt
+hw/profile-drive.dsn
+hw/profile-drive.ses
+hw/remove_part.py
