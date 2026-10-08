@@ -82,6 +82,28 @@ exercise-prog` (a known pattern on the DB-25 with no host) and `make
 stream-prog SBLOCK=n` (a real block onto the DB-25 with no host). Each
 is described in its own section below.
 
+### Building for the r1 board
+
+The r1 board in `hw/` is this same design on an LFE5U-12F in a
+TQFP-144, and `constraints/profile-drive.lpf` matches its PCB pin for
+pin. The Makefile is written around the ULX3S, but its variables
+override from the command line:
+
+    make PROJ=profile_emu_r1 LPF=constraints/profile-drive.lpf ECP5PKG=TQFP144 profile_emu_r1.bit
+
+That makes the compressed, fast-read flash copy. r1 has no working JTAG
+today, so the image is written through the J6 flash header with the
+ESP8266 serprog in `~/bringup-r1` (flashrom, a 1 MB region, about five
+minutes with the verify).
+
+After any rebuild for r1, read the catalog back (the dumper's `K`, or a
+window read of `$FFFF80`) rather than trusting the boot alone. The
+first r1 build met timing at 51.3 MHz against the 50 MHz target and
+passed every simulation. On the board, every catalog record carried the
+first image's block count. The critical path was the long-name slot
+multiply in `fat32.v`. Registering it once per entry (`lfn_base`) moved
+the build to 58.5 MHz, and the catalog was right.
+
 ## Electrical: the bus is 5V, the FPGA is not
 
 Two 74LVC245s serve as voltage level converters, since the FPGAs are
@@ -493,6 +515,21 @@ volume's real size from the image, not from the drive or driver.
   documented as idling asserted on some setups, and honoring it there pins the
   whole design in reset, which looks exactly like a board that does nothing.
   If the //e tries to reset the drive, we will not notice. In practice this never happens.
+- **The fat32 scanner is the critical path.** On the first r1 build it was
+  19.5 ns of a 20 ns period and the catalog was wrong on hardware while
+  every bench passed. `lfn_base` in `fat32.v` is the fix. The margin is
+  now about 17%. If a rebuild ever shows every catalog record with the
+  same block count, suspect timing before logic.
+- **The SELECT reply byte is not to be trusted.** `selector.v` answers `$00`
+  for an index below `img_count` and `$FF` otherwise. On hardware (build
+  10081647), accepted selects of indices 0 and 7 read back `$FF`, and the
+  selects took effect and persisted anyway. Likely the rescan a select
+  starts zeroes `img_count` while the reply is still being produced. This
+  has not been chased down. Confirm a select from the spare table's block
+  count instead.
+- **`make sim` fails at HEAD** ("phase-2 response: got $zz, expected $02")
+  and did before the fat32 change. `make sim-iie`, the strict //e bench,
+  passes. Not looked into.
 
 ## Status
 
@@ -516,6 +553,9 @@ reports a lower figure than the router's final one (47.79 against
 52.60 MHz in this build), so a build judged on the intermediate number
 looks like a failure when it is not. Do not read a seed sweep off the
 placement figure.
+
+On r1 (TQFP144, 2026-10-09) the same sources route at 58.47 MHz with the
+`lfn_base` change, against 51.29 MHz without it.
 
 **A 12F is enough.** A ULX3S sold as a 12F carries 25F silicon and
 must be targeted as `--25k`, which is what the numbers above are
