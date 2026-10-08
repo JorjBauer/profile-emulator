@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "device")(type "KiCad")(uri "${KIPRJMOD}/device.pretty")(options "")(descr "profile-drive local footprints"))
+)

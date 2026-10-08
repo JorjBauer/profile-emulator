@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "device")(type "KiCad")(uri "${KIPRJMOD}/device.kicad_sym")(options "")(descr "profile-drive generated symbols"))
+)

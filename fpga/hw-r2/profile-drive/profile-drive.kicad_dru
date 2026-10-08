@@ -1,0 +1,9 @@
+(version 1)
+
+# The GCT USB4105 receptacle places its ground pads 0.194 mm from its own
+# NPTH locating pegs. That is the vendor's footprint geometry, not a routing
+# choice, so J1 is exempted from the board's 0.254 mm hole-to-copper minimum.
+# Everything else on the board is held to the full value.
+(rule "USB-C footprint hole spacing"
+	(condition "A.memberOfFootprint('J1') && B.memberOfFootprint('J1')")
+	(constraint hole_clearance (min 0.19mm)))
