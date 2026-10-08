@@ -22,7 +22,8 @@
 // stimulus. It is the only configuration in which the write-back is exercised.
 module tb_fat32 #(parameter AUTO = 1'b1, parameter NOCFG = 1'b0,
                   parameter RECURSE = 1'b1, parameter NOLFN = 1'b0,
-                  parameter PERSIST = 1'b0);
+                  parameter PERSIST = 1'b0,
+                  parameter MANY    = 1'b0);   // five images of five sizes
 
    localparam integer TCK = 10;
    reg clk = 0, rst = 1;
@@ -66,7 +67,7 @@ module tb_fat32 #(parameter AUTO = 1'b1, parameter NOCFG = 1'b0,
                                                                            .ready(sd_ready), .err_code(sd_errc), .dbg_state(sd_dbg));
 
    sd_model #(.FS_IMAGE(1'b1), .FS_NOCFG(NOCFG), .NOLFN(NOLFN),
-              .TWO_IMG(PERSIST), .CFG_TWO(PERSIST)) card (
+              .TWO_IMG(PERSIST), .CFG_TWO(PERSIST), .MANY_IMG(MANY)) card (
                                                           .sd_clk(sd_clk), .sd_cs_n(sd_cs_n), .sd_mosi(sd_mosi), .sd_miso(sd_miso));
 
    // AUTOPICK on: this bench is about resolving and mapping, not about the
@@ -154,6 +155,30 @@ module tb_fat32 #(parameter AUTO = 1'b1, parameter NOCFG = 1'b0,
          $display("-- persisting a selection that actually changes");
          $display("    after the initial resolve: ok=%0b err=%0d img_index=%0d img_count=%0d",
                   f_ok, f_err, f_img_index, f_img_count);
+         // Both records' block counts, because the card holds two images of
+         // DIFFERENT sizes here (4 blocks and 2): a count that is stuck at the
+         // first image's value shows up as record 1 reading 4.
+         begin : twocounts
+            integer k, r, nrec;
+            reg [31:0] blocks, want;
+            nrec = MANY ? 5 : 2;
+            check(f_img_count === nrec[7:0], "every image was counted");
+            for (r = 0; r < nrec; r = r + 1) begin
+               blocks = 0;
+               for (k = 0; k < 4; k = k + 1) begin
+                  cat_rd(12'd64 * r[11:0] + 12'd50 + k[11:0], b);
+                  blocks = blocks | ({24'd0, b} << (8 * k));
+               end
+               $write("    record %0d name: \"", r);
+               for (k = 0; k < 14; k = k + 1) begin
+                  cat_rd(12'd64 * r[11:0] + 12'd2 + k[11:0], b);
+                  $write("%0s", (b >= 32 && b < 127) ? b : ".");
+               end
+               $display("\" block count: %0d", blocks);
+               want = (r == 0) ? 32'd4 : (r == 1) ? 32'd2 : (r == 2) ? 32'd65536 : (r == 3) ? 32'd4096 : 32'd6;
+               check(blocks === want, "the record holds its own image's block count");
+            end
+         end
          resel_idx = 8'd0;
          @(posedge clk); resel = 1'b1; @(posedge clk); resel = 1'b0;
          wait (f_ready);

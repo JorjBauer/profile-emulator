@@ -218,6 +218,14 @@ module fat32 #(
    reg [6:0]  parse_i1;
    reg [1:0]  parse_ph;
    reg [5:0]  seq_cand;     // sequence number of the LFN entry being read
+   // (seq_cand - 1) * 13 is the name-buffer slot where this LFN entry's
+   // first character lands. We used to recompute that product in every
+   // path that needs it. On the r1 build it was the slowest path in
+   // the whole design (19.5 ns of a 20 ns period). Now it's computed
+   // once, when the entry's sequence byte arrives, and the character
+   // paths just add their slot to it. Same 7-bit wrap as the expression
+   // it replaces, so nothing downstream changes.
+   reg [6:0]  lfn_base;
    reg        is_lfn;       // ...confirmed once its attribute byte arrives
 
    // Which character of the name a byte offset within an LFN entry
@@ -526,7 +534,7 @@ module fat32 #(
          mode <= M_CFG; have_cfg <= 1'b0; path_len <= 0; name_start <= 0;
          name_len <= 0; cfg_clus <= 0; pbuf_we <= 1'b0; pbuf_a <= 0; pbuf_d <= 0;
          lfn_seen <= 1'b0;
-         seq_cand <= 0; is_lfn <= 1'b0; parse_i <= 0; parse_i1 <= 7'd1;
+         seq_cand <= 0; lfn_base <= 7'd115; is_lfn <= 1'b0; parse_i <= 0; parse_i1 <= 7'd1;
          parse_ph <= 2'd0;
          img_count <= 8'd0; img_index <= 8'd0;
          e_del <= 1'b0; nb_len <= 6'd0; cmt_len <= 6'd0;
@@ -719,12 +727,12 @@ module fat32 #(
                           end
                        end else if (lfn_wr) begin
                           if (lfn_c[lfn_wi] != 8'h00) begin
-                             nb_a  <= (({1'b0, seq_cand} - 7'd1) * 7'd13 + {4'd0, lfn_wi});
+                             nb_a  <= (lfn_base + {4'd0, lfn_wi});
                              nb_d  <= lfn_c[lfn_wi];
                              nb_we <= 1'b1;
-                             if ((({1'b0, seq_cand} - 7'd1) * 7'd13 + {4'd0, lfn_wi}) + 7'd1
+                             if ((lfn_base + {4'd0, lfn_wi}) + 7'd1
                                  > {1'b0, nb_len})
-                               nb_len <= (({1'b0, seq_cand} - 7'd1) * 7'd13
+                               nb_len <= (lfn_base
                                           + {4'd0, lfn_wi}) + 6'd1;
                           end
                           if (lfn_wi == 3'd4) lfn_wr <= 1'b0;
@@ -836,6 +844,7 @@ module fat32 #(
                           if (mode != M_CFG && !scanning_root) begin
                              if (bi[4:0] == 5'd0) begin
                                 seq_cand <= sd_buf_wdata[5:0];
+                                lfn_base <= ({1'b0, sd_buf_wdata[5:0]} - 7'd1) * 7'd13;
                                 is_lfn   <= 1'b0;
                              end
                              if (bi[4:0] == 5'd11) begin
@@ -965,20 +974,20 @@ module fat32 #(
                                     && (sd_buf_wdata == 8'h00 || sd_buf_wdata == 8'hFF))
                                   lfn_c[lfn_slot(bi[4:0])] <= 8'h00;
                                 if (sd_buf_wdata != 8'h00 && sd_buf_wdata != 8'hFF
-                                    && (({1'b0, seq_cand} - 7'd1) * 7'd13
+                                    && (lfn_base
                                         + {3'd0, lfn_slot(bi[4:0])}) < 7'd48) begin
                                    if (bi[4:0] < 5'd11) begin
                                       // slots 0 to 4 only, which is what
                                       // offsets 1 to 9 give
                                       lfn_c[lfn_slot(bi[4:0])] <= sd_buf_wdata;
                                    end else begin
-                                      nb_a  <= (({1'b0, seq_cand} - 7'd1) * 7'd13
+                                      nb_a  <= (lfn_base
                                                 + {3'd0, lfn_slot(bi[4:0])});
                                       nb_d  <= sd_buf_wdata;
                                       nb_we <= 1'b1;
-                                      if ((({1'b0, seq_cand} - 7'd1) * 7'd13
+                                      if ((lfn_base
                                            + {3'd0, lfn_slot(bi[4:0])}) + 7'd1 > {1'b0, nb_len})
-                                        nb_len <= (({1'b0, seq_cand} - 7'd1) * 7'd13
+                                        nb_len <= (lfn_base
                                                    + {3'd0, lfn_slot(bi[4:0])}) + 6'd1;
                                    end
                                 end

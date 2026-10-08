@@ -52,6 +52,11 @@ module sd_model #(
                   // already the configured one, and the drive short-circuits a
                   // same-index reselect as a no-op.
                   parameter         CFG_TWO     = 1'b0,
+                  // Three more images after two.img, the way a real card
+                  // looks: long names spanning two LFN entries, a 32 MB
+                  // and a 2 MB file among them, sizes all different. Only
+                  // the catalog sees them; nothing resolves them.
+                  parameter         MANY_IMG    = 1'b0,
                   parameter         IS_SDHC     = 1'b1
                   ) (
                      input  wire sd_clk,
@@ -167,6 +172,65 @@ module sd_model #(
            default: ascii = 8'hFF;            // padding past the terminator
          endcase
          lfn2_ch = hi ? ((c >= 7) ? ((c == 7) ? 8'h00 : 8'hFF) : 8'h00) : ascii;
+      end
+   endfunction
+
+   // One UTF-16 byte of an arbitrary long name held right-justified in a
+   // 256-bit vector: character c of a len-character name, low or high byte.
+   // Past the end, the terminator (0000) once, then FFFF padding, which is
+   // what every FAT formatter writes.
+   function [7:0] lfn_g(input [255:0] nm, input integer len, input integer c, input hi);
+      begin
+         if (c < len)       lfn_g = hi ? 8'h00 : nm[8*(len-1-c) +: 8];
+         else if (c == len) lfn_g = 8'h00;
+         else               lfn_g = 8'hFF;
+      end
+   endfunction
+
+   // Byte o (0..31) of long-name entry number k (1-based chunk) for that name.
+   function [7:0] lfn_ent(input [255:0] nm, input integer len, input integer k, input last, input integer o);
+      begin
+         if (o == 0)                  lfn_ent = k[7:0] | (last ? 8'h40 : 8'h00);
+         else if (o >= 1 && o <= 10)  lfn_ent = lfn_g(nm, len, 13*(k-1) + ((o-1) >> 1), (o-1) & 1);
+         else if (o == 11)            lfn_ent = 8'h0F;
+         else if (o >= 14 && o <= 25) lfn_ent = lfn_g(nm, len, 13*(k-1) + 5 + ((o-14) >> 1), (o-14) & 1);
+         else if (o >= 28)            lfn_ent = lfn_g(nm, len, 13*(k-1) + 11 + ((o-28) >> 1), (o-28) & 1);
+         else                         lfn_ent = 8'h00;   // type, checksum, cluster
+      end
+   endfunction
+
+   // Byte o of an 8.3 entry: name, a normal file, first cluster, size.
+   function [7:0] ent83(input [87:0] n11, input integer clus, input [31:0] size, input integer o);
+      begin
+         if (o < 11)       ent83 = fs_name(n11, o);
+         else if (o == 11) ent83 = 8'h20;
+         else if (o == 26) ent83 = clus[7:0];
+         else if (o == 27) ent83 = clus[15:8];
+         else if (o >= 28) ent83 = size[8*(o-28) +: 8];
+         else              ent83 = 8'h00;
+      end
+   endfunction
+
+   // The three MANY_IMG files, entries 7..14 of /HD (bytes 224..479), with
+   // the end-of-directory zeros after them.
+   localparam [255:0] NM_A = "TOTAL REPLAY V5.2.HDV";   localparam integer LN_A = 21;
+   localparam [255:0] NM_B = "PRODOS322MG.IMG";         localparam integer LN_B = 15;
+   localparam [255:0] NM_C = "NOX.IMG";                 localparam integer LN_C = 7;
+   function [7:0] many_byte(input integer j);   // j = 0..255 past byte 224
+      integer e, o;
+      begin
+         e = j / 32; o = j % 32;
+         case (e)
+           0: many_byte = lfn_ent(NM_A, LN_A, 2, 1'b1, o);
+           1: many_byte = lfn_ent(NM_A, LN_A, 1, 1'b0, o);
+           2: many_byte = ent83("TOTALR~1HDV", 20, 32'h0200_0000, o);   // 32 MB, 65536 blocks
+           3: many_byte = lfn_ent(NM_B, LN_B, 2, 1'b1, o);
+           4: many_byte = lfn_ent(NM_B, LN_B, 1, 1'b0, o);
+           5: many_byte = ent83("PRODOS~1IMG", 21, 32'h0020_0000, o);   // 2 MB, 4096 blocks
+           6: many_byte = lfn_ent(NM_C, LN_C, 1, 1'b1, o);
+           7: many_byte = ent83("NOX     IMG", 22, 32'h0000_0C00, o);   // 3 KB, 6 blocks
+           default: many_byte = 8'h00;
+         endcase
       end
    endfunction
 
@@ -323,6 +387,7 @@ module sd_model #(
             else if (TWO_IMG && j == 203) b = 8'h20;      // a normal file
             else if (TWO_IMG && j == 218) b = 8'd9;       // first cluster low = 9
             else if (TWO_IMG && j == 221) b = 8'h04;      // size = 1024 = 2 blocks
+            else if (MANY_IMG && j >= 224 && j < 480) b = many_byte(j - 224);
             else               b = 8'h00;
 
          end else if (lba == FS_PART + 9) begin          // profile.cfg, cluster 8
