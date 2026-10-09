@@ -5,6 +5,8 @@ src/blobs/*.hex
 profile_emu_*.json
 profile_emu_*.config
 profile_emu_*.bit
+profile_emu_*-1m.bin
+profile_emu_*.layout
 # Editor backups
 *~
 

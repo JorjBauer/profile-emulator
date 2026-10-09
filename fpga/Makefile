@@ -6,6 +6,13 @@
 #   make flash    write SPI flash, so it survives a power cycle
 #   make stat     resource report only, yosys alone, no place and route
 #
+# The r1 board in hw/ builds from the same sources; see "the r1 board" below:
+#
+#   make r1           both r1 bitstreams, the flash copy and the SRAM copy
+#   make r1-prog      r1: load SRAM over JTAG (FT4232H on J4), volatile
+#   make r1-flash     r1: write the SPI flash over JTAG, through the FPGA
+#   make r1-flash-j6  r1: write the SPI flash through J6 with the D1 mini
+#
 # The board is the ULX3S, wired to the interface board as described in
 # carrier/ULX3S-ADAPTER.md. The full design, recursion and all, fits with room
 # to spare; `make stat` reports the count.
@@ -78,7 +85,9 @@ all: $(PROJ).bit
 
 # ---- the build rules, once, for every bitstream flavor ----------------------
 # $(1) is the project basename, $(2) any extra chparam settings on top of
-# $(ECP5_PARAMS). Every flavor gets four files:
+# $(ECP5_PARAMS), $(3) the LPF and $(4) the package; if those two are left
+# blank, then the ULX3S's $(LPF) and $(ECP5PKG) are used. Every flavor gets
+# four files:
 #
 #   <p>.json           synthesized netlist
 #   <p>.config         placed and routed
@@ -107,9 +116,9 @@ $(1).json: $$(SRC) $$(BLOBS)
 	  hierarchy -top top -purge_lib; \
 	  synth_ecp5 -top top -json $$@"
 
-$(1).config: $(1).json $$(LPF)
-	nextpnr-ecp5 $$(ECP5DEV) --package $$(ECP5PKG) --json $$< --lpf $$(LPF) \
-	  --textcfg $$@ --freq 50
+$(1).config: $(1).json $(if $(3),$(3),$$(LPF))
+	nextpnr-ecp5 $$(ECP5DEV) --package $(if $(4),$(4),$$(ECP5PKG)) --json $$< \
+	  --lpf $(if $(3),$(3),$$(LPF)) --textcfg $$@ --freq 50
 
 $(1).bit: $(1).config
 	ecppack --idcode 0x21111043 --compress --freq 38.8 --spimode fast-read $$< $$@
@@ -377,6 +386,65 @@ sim-v1skew: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 
 sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew
 
+# ---- the r1 board (hw/) -----------------------------------------------------
+# The same design on the same silicon in a TQFP-144, with its own pinout in
+# constraints/profile-drive.lpf. It gets its own project name so that an r1
+# build and a ULX3S build can sit side by side without clobbering each other.
+#
+# JTAG is an FT4232H module on J4, channel A, which the module labels as a
+# UART: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2), CTS to
+# TMS (pin 5), GND to pin 6, nothing on pin 1. The GuruPlug FT2232D adapter
+# reads garbage from this chip (IDCODE 0xfff80003), so don't use it here.
+#
+# There are two ways into the flash. r1-flash goes over JTAG through the FPGA,
+# the same as the ULX3S flash target, and it's the quick one. r1-flash-j6 is
+# the path from before JTAG worked. It is the one to fall back on if the FPGA
+# ever won't configure. It uses the D1 mini serprog sketch in
+# ~/bringup-r1/d1-serprog, sitting on the J6 header (G to 2, D2 to 3, D5 to 4,
+# D7 to 5, D6 to 6, D1 to 7, nothing on 1).
+#
+# The sketch holds PROGRAMN low from the moment it powers up, so a freshly
+# plugged-in D1 keeps the FPGA in reset until flashrom has run once. It floats
+# the pin when flashrom exits, and the FPGA reboots into the new image on its
+# own.
+#
+# flashrom wants a file exactly the size of the region it writes. So we pad
+# the bitstream to 1 MB with 0xFF and write a one-line layout for it. -N keeps
+# flashrom from verifying the other 15 MB, which would take about 25 minutes at
+# 115200 baud. The 1 MB it does verify is most of the five minutes.
+R1PROJ   := profile_emu_r1
+R1LPF    := constraints/profile-drive.lpf
+R1PKG    := TQFP144
+R1CABLE  ?= ft4232
+R1REGION := 0x100000
+SERPROG  ?= /dev/cu.usbserial-120
+SERBAUD  ?= 115200
+FLASHROM ?= /opt/homebrew/sbin/flashrom
+
+# If someone builds r1 the old way (make PROJ=profile_emu_r1 ...), then the
+# generic rules above already cover it, and defining it twice would only
+# earn "overriding recipe" warnings.
+ifneq ($(PROJ),$(R1PROJ))
+$(eval $(call ECP5_BUILD,$(R1PROJ),,$(R1LPF),$(R1PKG)))
+endif
+
+r1: $(R1PROJ).bit $(R1PROJ)_nextflash.bit
+
+r1-prog: $(R1PROJ)_nextflash.bit
+	openFPGALoader -c $(R1CABLE) $<
+
+r1-reload:
+	openFPGALoader -c $(R1CABLE) $(R1PROJ)_nextflash.bit
+
+r1-flash: $(R1PROJ).bit
+	openFPGALoader -c $(R1CABLE) -f $<
+
+r1-flash-j6: $(R1PROJ).bit
+	python3 -I -c "import sys; d=open(sys.argv[1],'rb').read(); n=int(sys.argv[3],0); assert len(d)<=n, 'bitstream is larger than the flash region'; open(sys.argv[2],'wb').write(d+b'\xff'*(n-len(d))); open(sys.argv[4],'w').write('000000:%06x boot\n'%(n-1))" $< $(R1PROJ)-1m.bin $(R1REGION) $(R1PROJ).layout
+	$(FLASHROM) -p serprog:dev=$(SERPROG):$(SERBAUD) --layout $(R1PROJ).layout -i boot:$(R1PROJ)-1m.bin -w -N
+
+CLEANFILES += $(R1PROJ)-1m.bin $(R1PROJ).layout
+
 # ---- whole-volume verification bitstream ------------------------------------
 # A SEPARATE bitstream, because the verifier holds the SD engine for the whole
 # run and no build that serves a host should do that. Override the range on the
@@ -448,6 +516,7 @@ clean:
 	rm -f $(CLEANFILES) $(BLOBS) .build_id
 
 .PHONY: all blobs prog reload flash stat ecp5 ecp5-prog ecp5-reload ecp5-flash ecp5-stat \
+        r1 r1-prog r1-reload r1-flash r1-flash-j6 \
         sim sim-iie sim-iie-late sim-iie-fast sim-iie-32mb sim-sd sim-geom sim-verify \
         sim-verify-stride sim-retry sim-retry-exhaust sim-usb-prov sim-router-race \
         sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-fat32-lru \

@@ -86,15 +86,23 @@ is described in its own section below.
 
 The r1 board in `hw/` is this same design on an LFE5U-12F in a
 TQFP-144, and `constraints/profile-drive.lpf` matches its PCB pin for
-pin. The Makefile is written around the ULX3S, but its variables
-override from the command line:
+pin. It builds next to the ULX3S flavor under its own name:
 
-    make PROJ=profile_emu_r1 LPF=constraints/profile-drive.lpf ECP5PKG=TQFP144 profile_emu_r1.bit
+    make r1             both bitstreams: the compressed flash copy and the SRAM copy
+    make r1-prog        load SRAM over JTAG, volatile
+    make r1-reload      the same with no rebuild
+    make r1-flash       write the SPI flash over JTAG, through the FPGA
+    make r1-flash-j6    write the SPI flash through J6 with the D1 mini serprog
 
-That makes the compressed, fast-read flash copy. r1 has no working JTAG
-today, so the image is written through the J6 flash header with the
-ESP8266 serprog in `~/bringup-r1` (flashrom, a 1 MB region, about five
-minutes with the verify).
+JTAG is an FT4232H module on J4, channel A, under the module's UART
+labels: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2),
+CTS to TMS (pin 5), GND to pin 6, nothing on pin 1. The GuruPlug FT2232D
+adapter reads garbage from this ECP5; don't use it. Both JTAG targets
+work. The serprog path through J6 is the fallback for a board whose
+FPGA won't configure: it takes about five minutes (most of it the
+verify) and reboots the FPGA into the new image when flashrom exits.
+`SERPROG=` and `R1CABLE=` on the make line override the serprog's port
+and the cable name.
 
 After any rebuild for r1, read the catalog back (the dumper's `K`, or a
 window read of `$FFFF80`) rather than trusting the boot alone. The
