@@ -2,6 +2,7 @@
   (layer "F.Cu")
   (descr "SOIC-8 dual land pattern: takes either the 150-mil body (3.9 x 4.9 mm, lead span about 6.0 mm, e.g. 8 to 64 Mbit parts) or the 208-mil body (5.3 x 5.3 mm, lead span 7.9 mm, e.g. Winbond W25Q128JVSIQ). Each pad is 2.5 mm long, from 1.8 mm to 4.3 mm out from the center line, so a 150-mil foot (about 2.0 to 3.0 mm out) and a 208-mil foot (about 3.1 to 3.95 mm out) both sit on copper. Pin 1 at top left, counterclockwise, JEDEC order.")
   (tags "SOIC-8 dual 150mil 208mil")
+  (fp_text user "${REFERENCE}" (at 0 0 0) (layer "F.Fab") (effects (font (size 0.8 0.8) (thickness 0.12))))
   (attr smd)
   (property "Reference" "REF**" (at 0 -3.6 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
   (property "Value" "SOIC-8_Dual_150-208mil_P1.27mm" (at 0 3.6 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))

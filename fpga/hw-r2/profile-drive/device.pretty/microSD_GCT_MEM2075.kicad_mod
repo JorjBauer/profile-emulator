@@ -2,6 +2,7 @@
   (layer "F.Cu")
   (descr "GCT MEM2075-00-140-01-A microSD push-push, from the maker's drawing (https://gct.co/files/drawings/mem2075.pdf, rev A1, sheet 1/2, 'Recommended PCB Layout, as viewed from component side'). Origin = midpoint of the two locating posts in X, center of the contact-pad row in Y. +Y runs into the board away from the contacts toward the card slot; the card's mouth is at Y = 15.40. Contact pads: pitch 1.10, 9 x 0.62 x 1.40 (P1 at X = 2.58, the card-detect pad at X = -6.22). Ground (shell) pads: 4 x 1.10 x 2.40, at X = -7.60 (1.38 outside the card-detect pad) and X = 8.55 (5.97 outside P1), 16.15 apart; Y = 2.00 and 11.00 (9.00 between the pairs). Locating holes: diameter 0.95, 6.80 apart (X = +/-3.40), 0.42 beyond the lower ground pads at Y = 11.42, and 3.98 short of the mouth. Corrected 2026-10-06 after an independent audit against the drawing; the first version put the holes at Y = 9.54 and the shell pads 0.5 mm off.")
   (tags "microSD MEM2075 GCT push-push")
+  (fp_text user "${REFERENCE}" (at 0.5 8.0 0) (layer "F.Fab") (effects (font (size 0.8 0.8) (thickness 0.12))))
   (attr smd)
   (property "Reference" "REF**" (at 0 -2.5 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
   (property "Value" "microSD_GCT_MEM2075" (at 0 17.0 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))

@@ -2,6 +2,7 @@
   (layer "F.Cu")
   (descr "Same Sky TS18-5-xx-SL-xxx-SMT-TR tactile switch, 5.2 x 5.2 mm body, 1.5 mm and up actuator height, 4 terminals. Land pattern is the datasheet's Recommended PCB Layout (ts18.pdf page 2): pads 1.7 x 1.0 mm, 8.0 mm overall and 4.6 mm inner gap along X, 4.8 mm overall and 2.8 mm inner gap along Y. Terminals 1 and 2 are tied together inside (top row). Terminals 3 and 4 are tied together (bottom row). The switch closes between the two rows. So the two pads of each row carry the same pad number: 1 = top row, 2 = bottom row. Also fits the generic 5x5x1.5 mm 4-terminal SMD tact switches (XKB TS-1187A style, 3.7 mm terminal pitch, 6.4 mm lead span).")
   (tags "tactile switch SMD 5.2x5.2 Same Sky TS18 XKB TS-1187A")
+  (fp_text user "${REFERENCE}" (at 0 0 0) (layer "F.Fab") (effects (font (size 0.8 0.8) (thickness 0.12))))
   (attr smd)
   (property "Reference" "REF**" (at 0 -3.9 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
   (property "Value" "SW_Push_SameSky_TS18-5" (at 0 3.9 0) (layer "F.Fab") (effects (font (size 1 1) (thickness 0.15))))

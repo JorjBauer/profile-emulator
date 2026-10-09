@@ -297,6 +297,25 @@
         "line_style": 0,
         "microvia_diameter": 0.3,
         "microvia_drill": 0.1,
+        "name": "aux",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": -1,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.22,
+        "tuning_profile": "",
+        "via_diameter": 0.56,
+        "via_drill": 0.3,
+        "wire_width": 6
+      },
+      {
+        "bus_width": 12,
+        "clearance": 0.16,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
         "name": "core",
         "pcb_color": "rgba(0, 0, 0, 0.000)",
         "priority": -1,
@@ -354,7 +373,7 @@
         "pattern": "+2V5"
       },
       {
-        "netclass": "core",
+        "netclass": "aux",
         "pattern": "VCCAUX_F"
       },
       {
