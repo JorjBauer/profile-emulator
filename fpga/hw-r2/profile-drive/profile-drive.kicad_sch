@@ -16,7 +16,7 @@
   (text "DB-25, level translators, series and pull resistors" (exclude_from_sim no) (at 15.24 154.94 0) (effects (font (size 1.27 1.27)) (justify left top)) (uuid "18b632e2-0378-5978-aec6-6de3dad29a5d"))
   (text "microSD socket in SPI mode" (exclude_from_sim no) (at 109.22 154.94 0) (effects (font (size 1.27 1.27)) (justify left top)) (uuid "2f227776-a1c7-5054-b61b-daa679495e43"))
   (text "console header, status LEDs" (exclude_from_sim no) (at 203.2 154.94 0) (effects (font (size 1.27 1.27)) (justify left top)) (uuid "383d445b-797c-5a92-97fe-0f04b245f384"))
-  (text "Global nets: the power rails, USB_DP/USB_DM (Power to UART sheet) and JTAG_* (Configuration to UART sheet).\nEverything else stays inside its sheet." (exclude_from_sim no) (at 15.24 177.8 0) (effects (font (size 1.27 1.27)) (justify left top)) (uuid "b03ad560-c593-55f0-9aac-23e036a1191c"))
+  (text "Global nets: the power rails, JTAG_* (both ends on the Configuration sheet) and FPGA_REBOOT (FPGA power sheet to Configuration).\nEverything else stays inside its sheet." (exclude_from_sim no) (at 15.24 177.8 0) (effects (font (size 1.27 1.27)) (justify left top)) (uuid "b03ad560-c593-55f0-9aac-23e036a1191c"))
   (sheet (at 15.24 43.18) (size 81.28 38.1) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0))
     (uuid "52653336-3db4-5871-a322-379b0d9ed0e5")
     (property "Sheetname" "Power" (at 15.24 42.48 0) (effects (font (size 1.27 1.27)) (justify left bottom)))
