@@ -4,7 +4,7 @@
   (title_block
     (title "ProFile drive replacement: LFE5U-12F TQFP144, standalone")
     (date "2026-09-03")
-    (rev "0.3")
+    (rev "r2")
   )
   (lib_symbols
   )

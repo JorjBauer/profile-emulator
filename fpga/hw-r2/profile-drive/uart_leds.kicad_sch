@@ -4,7 +4,7 @@
   (title_block
     (title "UART and LEDs")
     (date "2026-09-03")
-    (rev "0.3")
+    (rev "r2")
   )
   (lib_symbols
     (symbol "device:C"

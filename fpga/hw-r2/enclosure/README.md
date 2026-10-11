@@ -45,5 +45,5 @@ Every screw hole is 2.6 mm for M3 thread-forming screws. If you'd rather use bra
 ## Caveats
 
 - Nothing here has been printed yet.
-- The DB-25 height comes from the NorComp drawing (the flange hangs 3.18 mm below the board top) and the standoffs, which put the board's bottom 4.1 mm above the floor. If J2 isn't seated flat on the board, the opening will be a little off. There's about 1.4 mm of slack around the shell.
-- The microSD socket is push-push, and the card's edge ends up about 2.9 mm behind the outside of the front wall, or 1.3 mm behind the bottom of the scoop. A fingernail reaches it through the scoop. Something like a toothpick works too.
+- The DB-25 height comes from the NorComp drawing (the flange's bottom edge is level with the board top; the drawing's 3.18 mm is the length of the tails below it) and the standoffs, which put the board's bottom 4.1 mm above the floor. If J2 isn't seated flat on the board, the opening will be a little off. The opening clears J2's own D by about 1.4 mm, but the mating plug's shell (about 41 x 10) by only about 0.4 to 0.5 mm a side.
+- The microSD socket is push-push. GCT's drawing puts a locked card's edge about 0.4 mm behind the outside of the front wall (1.5 mm behind at the push point), and an unlocked card sticks out about 2.7 mm. A fingernail reaches it through the scoop. Something like a toothpick works too.

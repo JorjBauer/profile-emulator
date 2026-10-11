@@ -4,7 +4,7 @@
   (title_block
     (title "SD card")
     (date "2026-09-03")
-    (rev "0.3")
+    (rev "r2")
   )
   (lib_symbols
     (symbol "device:C"
@@ -286,7 +286,7 @@
       )
     )
   )
-  (text "microSD in SPI mode. 33 R series on the four SPI lines at the FPGA; 10k pulls on CS, MOSI, MISO and card-detect at the socket." (exclude_from_sim no) (at 15.24 15.24 0) (effects (font (size 1.5 1.5)) (justify left top)) (uuid "645d61dc-cf1a-541c-bc9c-e7fa143714ab"))
+  (text "microSD in SPI mode. 33 R series on the four SPI lines at the FPGA; 10k pulls on CS, MOSI, MISO, DAT1, DAT2 (R46, R47) and card-detect at the socket." (exclude_from_sim no) (at 15.24 15.24 0) (effects (font (size 1.5 1.5)) (justify left top)) (uuid "645d61dc-cf1a-541c-bc9c-e7fa143714ab"))
   (symbol (lib_id "device:LFE5U_TQFP144") (at 45.72 96.52 0) (unit 4)
     (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)
     (uuid "a2cae7e1-9c67-5717-9b6a-91059a4bc7ff")
