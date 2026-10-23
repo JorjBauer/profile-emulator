@@ -61,7 +61,7 @@ environment first (`source ~/oss-cad-suite/environment`) and then
 whether a change still fits.
 
 **SRAM and flash get different bitstreams, and this is not optional.** The flash
-copy is compressed and configured for fast-read at 38.8 MHz. An
+copy is compressed and configured for fast-read at 38.8 MHz (62 MHz on r2). An
 uncompressed stream takes about 2.25 s to load and loses the power-on race
 against the //e on its own. Compressed, the same load is about 70 ms. Loading
 that same compressed flavor into SRAM over JTAG makes the ECP5's config engine
@@ -112,6 +112,61 @@ first image's block count. The critical path was the long-name slot
 multiply in `fat32.v`. Registering it once per entry (`lfn_base`) moved
 the build to 58.5 MHz, and the catalog was right.
 
+### Building for the r2 board
+
+The r2 board in `hw-r2/` is the same design again, on the same LFE5U-12F
+TQFP-144, with its own pinout in `constraints/profile-drive-r2.lpf`. r2 added
+three pins the other boards don't have, so its top module is `src/top_r2.v`,
+which wraps `top` and leaves every other build alone:
+
+- **U3_OE_N** (pin 76) enables U3, the buffer for the host's control lines.
+  R53 holds it off until the FPGA is configured, and the gateware ties it low.
+  If it isn't driven low, the FPGA never sees /PCMD or /PSTRB.
+- **XCVR_OE_N** (pin 74) is held off until the host asserts /PCMD the first
+  time, because PD0 to PD7 have no pulls and float with no cable.
+- **FPGA_REBOOT** (pin 67) goes to PROGRAMN through R48. Nothing uses it yet,
+  so it's an input we never read. Don't make it an output assigned `1'bz`:
+  nextpnr turns that into a driven pin, and low there reboots the part over
+  and over.
+
+The targets are the same shape as r1's:
+
+    make r2             both bitstreams
+    make r2-prog        load SRAM over JTAG, volatile
+    make r2-reload      the same with no rebuild
+    make r2-flash       write the SPI flash over JTAG, through the FPGA
+
+JTAG is wired exactly as on r1 (the FT4232H on J4, channel A, nothing on
+pin 1; `R2CABLE=` overrides the cable). Power the board from USB-C, not
+from J4. **Never load an r1 image into r2:** r1's pinout drives pins that are
+wired differently on r2.
+
+r2 boots faster than r1. The first r2 build lost the power-on race on a
+cold start. The //e's card ROM looks for the drive about 0.6 s after
+autostart reaches the slot, and if /PBSY or PCHK is wrong it skips the slot
+and never asks again. Two things changed, both only for r2:
+
+- The FPGA reads its flash at 62 MHz (`FLASHFREQ`, ecppack's top rate)
+  instead of 38.8. The 348 KB compressed load drops from about 72 ms to
+  about 45. The W25Q128 is good to 133 MHz.
+- The SD card initializes at 397 kHz (`SD_DIV_INIT` 62) instead of 100 kHz.
+  That's just under the 400 kHz the SD spec allows for initialization, and
+  it's fine now that the socket is on the board rather than on flying leads.
+  The first read also happens at this rate, so it's faster too.
+
+Reads after that stay at 8.33 MHz, which is the last rate measured to work on
+the old harness. r2 hasn't been swept yet (`SWEEP_ENABLE`), so it may well go
+faster.
+
+The FAT32 directory recursion is still on. It costs boot time when the card
+holds a lot of files, which is why the images belong in `HD`.
+
+With both changes, build 10231827 (60.17 MHz against the 50 MHz target)
+serves the //e from a cold start. I couldn't measure how much margin is
+left. The //e's monitor takes longer to come up than the drive does, so
+there's nothing to time on the screen. Bring-up notes for the board
+itself are in `hw-r2/BRINGUP-r2.md`.
+
 ## Electrical: the bus is 5V, the FPGA is not
 
 Two 74LVC245s serve as voltage level converters, since the FPGAs are
@@ -159,7 +214,7 @@ Module by module:
   reader, `$FFFFFE` to the RAM buffer, `$FFFFFF` to the synthesized spare table,
   and the `$FFFF00-$FFFFFD` selector window.
 - **`sd_spi`** is a plain SPI block reader, talking to a full-size SD socket
-  that a microSD sits in via an adapter: init at 100 kHz, run at the measured
+  that a microSD sits in via an adapter: init at 100 kHz (397 kHz on r2), run at the measured
   rates in the table below, CMD17 single-block read and CMD24 write. **Both
   card generations work.** SDHC addresses by block; a card that rejects CMD8 is
   treated as v1, ACMD41 goes out without HCS, CCS comes from the OCR, and CMD17
@@ -516,9 +571,10 @@ volume's real size from the image, not from the drive or driver.
 - **Clock domains.** One domain. The ULX3S's 25 MHz oscillator goes through an
   `EHXPLLL` to 50 MHz and everything runs from that; reset is held until the PLL
   locks. The SD clock is a divider off it, not a second clock domain: 100 kHz
-  for init, then the measured rates in the table above. `CLK_HZ` is a
-  parameter, and every real-time constant in the design is derived from it.
-  Changing the system clock keeps every timeout at the same real duration.
+  for init (397 kHz on r2), then the measured rates in the table above.
+  `CLK_HZ` is a parameter, and every real-time constant in the design is
+  derived from it. Changing the system clock keeps every timeout at the same
+  real duration.
 - **`/PRES` is IGNORED.** `HONOR_PRES` is 0 in `top.v`. The //e's reset line is
   documented as idling asserted on some setups, and honoring it there pins the
   whole design in reset, which looks exactly like a board that does nothing.
@@ -655,7 +711,8 @@ as a wiring limit rather than a protocol one. The settings are
 `SD_DIV_FAST` and `SD_DIV_WRITE` in `src/top.v`; re-measure with `SWEEP_ENABLE`
 before changing either.
 
-This should go away with the first manufactured PCBs.
+This should go away with the manufactured PCBs. As of this writing r2 hasn't
+been swept, so it still uses the harness's numbers.
 
 ### The first bench test: the SD card, with no host at all
 
@@ -700,7 +757,7 @@ the state it stopped in. That is more useful than the error code: it says which
 command never got an answer. led[5] blinking with nothing else lit means the part
 is configured and running but the card is not answering.
 
-The SD clock starts at 100 kHz to bring the card up and then moves to the rates
+The SD clock starts at 100 kHz (397 kHz on r2) to bring the card up and then moves to the rates
 in the table further up: 8.33 MHz for reads, 391 kHz for writes. Those are
 measured on this harness, not chosen. The socket is off-board on flying leads
 through 33R series resistors, which is the most likely reason writes stop an
@@ -727,7 +784,7 @@ electrical:
 | 4 | SD card detect, as wired |
 | 5 | SD write protect, as wired |
 | 6 | DB-25 1, /PH0 |
-| 7 | DB-25 7, AUX7 |
+| 7 | DB-25 7, AUX7 (always lit on r2, which dropped AUX7 and pulls the pin up) |
 
 led[3] is the one to look at if the board seems hung. `HONOR_PRES` in
 `src/top.v` is 0, so /PRES does NOT reach the core reset today. This display is

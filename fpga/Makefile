@@ -86,8 +86,9 @@ all: $(PROJ).bit
 # ---- the build rules, once, for every bitstream flavor ----------------------
 # $(1) is the project basename, $(2) any extra chparam settings on top of
 # $(ECP5_PARAMS), $(3) the LPF and $(4) the package; if those two are left
-# blank, then the ULX3S's $(LPF) and $(ECP5PKG) are used. Every flavor gets
-# four files:
+# blank, then the ULX3S's $(LPF) and $(ECP5PKG) are used. $(5) is an extra
+# source file and $(6) the top module it defines, for a board that wraps top
+# (r2). If $(6) is blank, the top module is top. Every flavor gets four files:
 #
 #   <p>.json           synthesized netlist
 #   <p>.config         placed and routed
@@ -98,6 +99,10 @@ all: $(PROJ).bit
 # bitstream. The board's chip answers JTAG as a 12F even though its fabric is
 # 25F silicon, and fujprog/openFPGALoader refuse on the mismatch otherwise.
 #
+# FLASHFREQ is the MCLK the part reads its own flash at, in MHz. 38.8 is the
+# tested default; a board can raise it with a target-specific value (r2 does).
+FLASHFREQ ?= 38.8
+#
 # --compress + --freq 38.8 + fast-read are the INSTANT-ON flags for the FLASHED
 # copy. At ecppack's 2.4 MHz default MCLK, an uncompressed 5.4 Mbit stream takes
 # ~2.25 s to load from flash. That alone loses the power-on race against the
@@ -107,21 +112,21 @@ all: $(PROJ).bit
 # FPGA blank. SRAM loads use _nextflash.bit instead.
 define ECP5_BUILD
 
-$(1).json: $$(SRC) $$(BLOBS)
+$(1).json: $$(SRC) $(5) $$(BLOBS)
 	@date -u +%m%d%H%M > .build_id
 	@echo "BUILD_ID $$$$(cat .build_id) ($(1))"
 	BID=$$$$((16#$$$$(cat .build_id))); \
-	yosys -p "read_verilog $$(SRC); \
+	yosys -p "read_verilog $$(SRC) $(5); \
 	  chparam $$(ECP5_PARAMS) $(2) -set BUILD_ID $$$$BID top; \
-	  hierarchy -top top -purge_lib; \
-	  synth_ecp5 -top top -json $$@"
+	  hierarchy -top $(if $(6),$(6),top) -purge_lib; \
+	  synth_ecp5 -top $(if $(6),$(6),top) -json $$@"
 
 $(1).config: $(1).json $(if $(3),$(3),$$(LPF))
 	nextpnr-ecp5 $$(ECP5DEV) --package $(if $(4),$(4),$$(ECP5PKG)) --json $$< \
 	  --lpf $(if $(3),$(3),$$(LPF)) --textcfg $$@ --freq 50
 
 $(1).bit: $(1).config
-	ecppack --idcode 0x21111043 --compress --freq 38.8 --spimode fast-read $$< $$@
+	ecppack --idcode 0x21111043 --compress --freq $$(FLASHFREQ) --spimode fast-read $$< $$@
 
 $(1)_nextflash.bit: $(1).config
 	ecppack --idcode 0x21111043 --freq 38.8 $$< $$@
@@ -445,6 +450,49 @@ r1-flash-j6: $(R1PROJ).bit
 
 CLEANFILES += $(R1PROJ)-1m.bin $(R1PROJ).layout
 
+# ---- the r2 board (hw-r2/) -------------------------------------------------
+# The same design again, wrapped in src/top_r2.v for the three pins r2 added
+# (U3's /OE, the reboot line, and holding U2 off until a host appears), with
+# its own pinout in constraints/profile-drive-r2.lpf. Do NOT load an r1 image
+# into an r2 board: r1's pinout drives pins that are wired differently here.
+#
+# JTAG is the same as r1: the FT4232H on J4, channel A, nothing on pin 1. The
+# board is powered from USB-C, never from J4.
+R2PROJ   := profile_emu_r2
+R2LPF    := constraints/profile-drive-r2.lpf
+R2CABLE  ?= ft4232
+
+# r2 races the //e at power-on. The card ROM checks for the drive about 0.6 s
+# after autostart reaches the slot, and it does not ask twice. Two things go
+# faster here than on r1.
+#
+# First, the part reads its flash at 62 MHz, ecppack's top rate (the W25Q128
+# does 133). That takes the 348 KB load from about 72 ms to about 45.
+#
+# Second, the card comes up at 397 kHz (SD_DIV_INIT 62) instead of 100 kHz.
+# That is just under the spec's 400 kHz for initialization. The faster rate is
+# safe because the socket is on the board now, not on flying leads. The first
+# read also stays at this initialization rate.
+# Reads after it stay at 8.33 MHz, the last rate measured to return correct
+# data. Re-measure with SWEEP_ENABLE before raising that.
+R2PARAMS := -set SD_DIV_INIT 62
+$(R2PROJ).bit: FLASHFREQ := 62.0
+
+ifneq ($(PROJ),$(R2PROJ))
+$(eval $(call ECP5_BUILD,$(R2PROJ),$(R2PARAMS),$(R2LPF),$(R1PKG),src/top_r2.v,top_r2))
+endif
+
+r2: $(R2PROJ).bit $(R2PROJ)_nextflash.bit
+
+r2-prog: $(R2PROJ)_nextflash.bit
+	openFPGALoader -c $(R2CABLE) $<
+
+r2-reload:
+	openFPGALoader -c $(R2CABLE) $(R2PROJ)_nextflash.bit
+
+r2-flash: $(R2PROJ).bit
+	openFPGALoader -c $(R2CABLE) -f $<
+
 # ---- whole-volume verification bitstream ------------------------------------
 # A SEPARATE bitstream, because the verifier holds the SD engine for the whole
 # run and no build that serves a host should do that. Override the range on the
@@ -516,7 +564,7 @@ clean:
 	rm -f $(CLEANFILES) $(BLOBS) .build_id
 
 .PHONY: all blobs prog reload flash stat ecp5 ecp5-prog ecp5-reload ecp5-flash ecp5-stat \
-        r1 r1-prog r1-reload r1-flash r1-flash-j6 \
+        r1 r1-prog r1-reload r1-flash r1-flash-j6 r2 r2-prog r2-reload r2-flash \
         sim sim-iie sim-iie-late sim-iie-fast sim-iie-32mb sim-sd sim-geom sim-verify \
         sim-verify-stride sim-retry sim-retry-exhaust sim-usb-prov sim-router-race \
         sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-fat32-lru \

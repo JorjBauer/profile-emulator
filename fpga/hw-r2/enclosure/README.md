@@ -30,8 +30,8 @@ I'd pick one of these:
 
 ## Hardware
 
-- 4x M3 x 6 thread-forming (or self-tapping) pan head screws: board to standoffs
-- 4x M3 x 10 thread-forming pan head screws: up through the feet into the cover
+- 4x M3 x 5 thread-forming (or self-tapping) pan head screws: board to standoffs. These are what I used; M3 x 6 is fine too, and M3 x 4 is too short.
+- 4x #4-40 x 1/2" pan head screws: up through the feet into the cover. These are what I used, cutting their own thread in the 2.6 mm pilot with about 10 mm of engagement; M3 x 10 thread-forming screws are the metric equivalent. #6-32 is too big for the pilot.
 
 Every screw hole is 2.6 mm for M3 thread-forming screws. If you'd rather use brass heat-set inserts, drill the holes out to about 4.0 mm.
 
@@ -40,7 +40,7 @@ Every screw hole is 2.6 mm for M3 thread-forming screws. If you'd rather use bra
 1. Tip the board's front edge up, push the DB-25 shell and its hex standoffs through the back panel, then lay the board down on the standoffs.
 2. Screw the board down.
 3. Lower the cover straight down over it. The back edge of the top rests on the back panel.
-4. Turn it over and put the four long screws up through the feet.
+4. Turn it over and put the four long screws up through the feet. Don't overtighten them in a printed part.
 
 ## Caveats
 
