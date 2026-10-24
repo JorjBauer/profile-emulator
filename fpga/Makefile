@@ -29,6 +29,10 @@ PROJ    := profile_emu_ulx3s
 LPF     := constraints/ulx3s.lpf
 ECP5DEV := --25k
 ECP5PKG := CABGA381
+
+# Without this, the first rule below (blobs) would be the default, and a bare
+# `make` would import the selector blobs and stop.
+.DEFAULT_GOAL := all
 # ---- the selector's 6502 blobs, imported from the submodule ----------------
 # ../selector is a submodule and builds itself. Its committed generated artifact
 # is selector_blobs.h; src/selector.v reads the two .hex files derived from it.
@@ -178,6 +182,12 @@ ecp5-stat: stat
 # catches a wiring-level mistake before two drivers fight on a 5V net.
 SIMBIN  := /tmp/profile_emu_tb
 
+# Every bench prints a PASS or FAIL line, but vvp exits 0 either way. So we
+# pipe its output through this: the run fails unless a PASS line appeared and
+# no FAIL line did. Requiring PASS also catches a bench that times out or
+# stops early.
+SIMCHECK := awk '{ print; fflush() } /^PASS/ { p = 1 } /^FAIL/ { f = 1 } END { exit (f || !p) }'
+
 # TRELLIS_IO is a Lattice cell: yosys has its own, iverilog needs ours. It goes
 # to the simulator ONLY, never into $(SRC), or synthesis would see two
 # definitions of the cell.
@@ -195,14 +205,14 @@ SIMSRC  := $(SRC) sim/trellis_io.v
 # sim-all  all of them
 sim: sim/tb_top.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -o $(SIMBIN) -s tb_top sim/tb_top.v $(SIMSRC)
-	vvp $(SIMBIN)
+	vvp $(SIMBIN) | $(SIMCHECK)
 
 # The //e, which is the strict host: a 355 ns strobe and no settling delay
 # after PR/-W rises. This is the test that catches a design that works on the
 # bench but fails to boot on real hardware.
 sim-iie: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -o $(SIMBIN)_iie -s tb_top_iie sim/tb_top_iie.v sim/sd_model.v $(SIMSRC)
-	vvp $(SIMBIN)_iie
+	vvp $(SIMBIN)_iie | $(SIMCHECK)
 
 # The same bench with the byte pacing squeezed to a quarter of the //e's. Not a
 # requirement, a margin measurement. If this passes there is real headroom. If
@@ -210,7 +220,7 @@ sim-iie: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 sim-iie-fast: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -Ptb_top_iie.BYTE_NS=2250 -Ptb_top_iie.STROBE_NS=200 \
 	  -o $(SIMBIN)_iief -s tb_top_iie sim/tb_top_iie.v sim/sd_model.v $(SIMSRC)
-	vvp $(SIMBIN)_iief
+	vvp $(SIMBIN)_iief | $(SIMCHECK)
 
 # The decoupled-geometry case through the HOST's path: a 65535-block image,
 # which can only ever claim $FFFC, reading a block above that claim. This is the
@@ -219,7 +229,7 @@ sim-iie-fast: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 sim-iie-32mb: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -Ptb_top_iie.IMG_BLOCKS=65535 \
 	  -o $(SIMBIN)_iie32 -s tb_top_iie sim/tb_top_iie.v sim/sd_model.v $(SIMSRC)
-	vvp $(SIMBIN)_iie32
+	vvp $(SIMBIN)_iie32 | $(SIMCHECK)
 
 # KNOWN FAILING, deliberately, and NOT in sim-all: a reproduction of the
 # late-driven byte 0, not a regression guard. LATE_NS=150 models the //e's card
@@ -231,18 +241,18 @@ sim-iie-32mb: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 sim-iie-late: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -Ptb_top_iie.LATE_NS=150 \
 	  -o $(SIMBIN)_iiel -s tb_top_iie sim/tb_top_iie.v sim/sd_model.v $(SIMSRC)
-	vvp $(SIMBIN)_iiel
+	vvp $(SIMBIN)_iiel | $(SIMCHECK)
 
 sim-sd: sim/tb_top_sd.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -o $(SIMBIN)_sd -s tb_top_sd sim/tb_top_sd.v sim/sd_model.v $(SIMSRC)
-	vvp $(SIMBIN)_sd
+	vvp $(SIMBIN)_sd | $(SIMCHECK)
 
 # The boot-path geometry rule and the decoupled-geometry band, on their own.
 # Pure combinational logic, so this one runs in milliseconds; there is no excuse
 # for not running it.
 sim-geom: sim/tb_geometry.v src/geometry.v
 	iverilog -g2012 -o $(SIMBIN)_geom -s tb_geometry sim/tb_geometry.v src/geometry.v
-	vvp $(SIMBIN)_geom
+	vvp $(SIMBIN)_geom | $(SIMCHECK)
 
 # The verifier, with its serial output decoded a bit at a time and every
 # checksum recomputed independently. The CRC is a contract between this Verilog
@@ -252,7 +262,7 @@ sim-geom: sim/tb_geometry.v src/geometry.v
 sim-verify: sim/tb_verifier.v src/verifier.v src/uart_tx.v
 	iverilog -g2012 -o $(SIMBIN)_ver -s tb_verifier \
 	  sim/tb_verifier.v src/verifier.v src/uart_tx.v
-	vvp $(SIMBIN)_ver
+	vvp $(SIMBIN)_ver | $(SIMCHECK)
 	@node tools/verify_image.js --selftest
 
 # The same, folding four sectors into each checksum. Stride is what makes a 4 GB
@@ -260,44 +270,44 @@ sim-verify: sim/tb_verifier.v src/verifier.v src/uart_tx.v
 sim-verify-stride: sim/tb_verifier.v src/verifier.v src/uart_tx.v
 	iverilog -g2012 -Ptb_verifier.STRIDE=4 -Ptb_verifier.COUNT=8 \
 	  -o $(SIMBIN)_vers -s tb_verifier sim/tb_verifier.v src/verifier.v src/uart_tx.v
-	vvp $(SIMBIN)_vers
+	vvp $(SIMBIN)_vers | $(SIMCHECK)
 
 # A card that rejects the first two reads. The retry path has to recover so the
 # reads still succeed. The retry count must be exactly two.
 sim-retry: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	iverilog -g2012 -Ptb_sd.FAILR=2 -o $(SIMBIN)_rty -s tb_sd \
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
-	vvp $(SIMBIN)_rty
+	vvp $(SIMBIN)_rty | $(SIMCHECK)
 
 # And a card that rejects more reads than the budget allows, so the give-up path
 # is tested too: an unbounded retry turns a failed card into a hang.
 sim-retry-exhaust: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	iverilog -g2012 -Ptb_sd.FAILR=5 -o $(SIMBIN)_rtx -s tb_sd \
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
-	vvp $(SIMBIN)_rtx
+	vvp $(SIMBIN)_rtx | $(SIMCHECK)
 
 # The no-host bus pattern, and the rule that it yields to a host instantly.
 # The parked-read race: a read parked behind a busy resolver must not inherit
 # the previous transaction's blk_ready.
 sim-usb-prov:
 	iverilog -g2012 -o /tmp/tb_usb_prov.vvp -s tb_usb_prov sim/tb_usb_prov.v src/usb_prov.v src/uart_tx.v
-	vvp /tmp/tb_usb_prov.vvp
+	vvp /tmp/tb_usb_prov.vvp | $(SIMCHECK)
 
 sim-router-race: sim/tb_router_race.v src/block_router.v src/spare_table.v
 	iverilog -g2012 -o $(SIMBIN)_race -s tb_router_race \
 	  sim/tb_router_race.v src/block_router.v src/spare_table.v
-	vvp $(SIMBIN)_race
+	vvp $(SIMBIN)_race | $(SIMCHECK)
 
 sim-exercise: sim/tb_exercise.v src/bus_exercise.v
 	iverilog -g2012 -o $(SIMBIN)_exr -s tb_exercise sim/tb_exercise.v src/bus_exercise.v
-	vvp $(SIMBIN)_exr
+	vvp $(SIMBIN)_exr | $(SIMCHECK)
 
 # The filesystem resolver: find an image in a subdirectory and resolve its
 # cluster chain, which the model deliberately fragments.
 sim-fat32: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 	iverilog -g2012 -o $(SIMBIN)_f32 -s tb_fat32 \
 	  sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
-	vvp $(SIMBIN)_f32
+	vvp $(SIMBIN)_f32 | $(SIMCHECK)
 
 # The shipping selection policy: with images present but none configured, serve
 # NOTHING. SELECTOR.md is explicit that the drive must not invent a default and
@@ -305,7 +315,7 @@ sim-fat32: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 sim-fat32-noauto: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 	iverilog -g2012 -Ptb_fat32.AUTO=0 -Ptb_fat32.NOCFG=1 -o $(SIMBIN)_f32n -s tb_fat32 \
 	  sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
-	vvp $(SIMBIN)_f32n
+	vvp $(SIMBIN)_f32n | $(SIMCHECK)
 
 # A configured image whose name is a bare 8.3 name, with AUTOPICK OFF so that
 # being resolved at all IS the name match. The card's entry is the on-disk
@@ -316,7 +326,7 @@ sim-fat32-83: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 	iverilog -g2012 -Ptb_fat32.NOLFN=1 -Ptb_fat32.AUTO=0 \
 	  -o $(SIMBIN)_f8 -s tb_fat32 \
 	  sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
-	vvp $(SIMBIN)_f8
+	vvp $(SIMBIN)_f8 | $(SIMCHECK)
 
 # The write-back, which is the ONLY bench that exercises it. It needs a
 # selection that really changes: profile.cfg names the second image and the
@@ -327,14 +337,14 @@ sim-fat32-83: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 sim-fat32-persist: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 	iverilog -g2012 -Ptb_fat32.PERSIST=1 -o $(SIMBIN)_fp -s tb_fat32 \
 	  sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
-	vvp $(SIMBIN)_fp
+	vvp $(SIMBIN)_fp | $(SIMCHECK)
 
 # The LRU-2 chain cache: two images, ephemeral reselect between them must be
 # instant (zero SD reads) and serve each image's own fragmented chain.
 sim-fat32-lru: sim/tb_fat32_lru.v sim/sd_model.v src/fat32.v src/sd_spi.v
 	iverilog -g2012 -o $(SIMBIN)_f32lru -s tb_fat32_lru \
 	  sim/tb_fat32_lru.v sim/sd_model.v src/fat32.v src/sd_spi.v
-	vvp $(SIMBIN)_f32lru
+	vvp $(SIMBIN)_f32lru | $(SIMCHECK)
 
 # The resolver with recursion compiled out. FS_RECURSE=0 is what the exercise
 # bitstream builds with, and it stays tested: same card, same config, same
@@ -343,18 +353,18 @@ sim-fat32-lru: sim/tb_fat32_lru.v sim/sd_model.v src/fat32.v src/sd_spi.v
 sim-fat32-flat: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 	iverilog -g2012 -Ptb_fat32.RECURSE=0 -o $(SIMBIN)_f32f -s tb_fat32 \
 	  sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
-	vvp $(SIMBIN)_f32f
+	vvp $(SIMBIN)_f32f | $(SIMCHECK)
 
 # The boot menu's magic blocks: the info block, the body pages, the synthetic
 # block 0 and SELECT. The 6502 side is not simulated; this checks that the drive
 # answers what that side asks for.
 sim-selector: sim/tb_selector.v src/selector.v $(BLOBS)
 	iverilog -g2012 -o $(SIMBIN)_sel -s tb_selector sim/tb_selector.v src/selector.v
-	vvp $(SIMBIN)_sel
+	vvp $(SIMBIN)_sel | $(SIMCHECK)
 
 sim-unit: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	iverilog -g2012 -o $(SIMBIN)_unit -s tb_sd sim/tb_sd.v sim/sd_model.v src/sd_spi.v
-	vvp $(SIMBIN)_unit
+	vvp $(SIMBIN)_unit | $(SIMCHECK)
 
 # The same unit test against a card whose replies are two bits out of byte
 # alignment, which is what the real one does. Without the alignment recovery in
@@ -362,7 +372,7 @@ sim-unit: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 sim-skew: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	iverilog -g2012 -Ptb_sd.SKEW=2 -o $(SIMBIN)_skew -s tb_sd \
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
-	vvp $(SIMBIN)_skew
+	vvp $(SIMBIN)_skew | $(SIMCHECK)
 
 # Every bit phase, not just the one the real card happened to show. The
 # alignment recovery has to be phase-independent or it is just a workaround.
@@ -371,7 +381,7 @@ sim-sweep: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	  iverilog -g2012 -Ptb_sd.SKEW=$$k -o $(SIMBIN)_sw -s tb_sd \
 	    sim/tb_sd.v sim/sd_model.v src/sd_spi.v || exit 1; \
 	  printf 'skew %s: ' $$k; \
-	  vvp $(SIMBIN)_sw | grep -E '^(PASS|FAIL)' || exit 1; \
+	  vvp $(SIMBIN)_sw | grep -E '^(PASS|FAIL)' | $(SIMCHECK) || exit 1; \
 	done
 
 # A card that rejects CMD8 and addresses by byte, which is what the real one
@@ -380,13 +390,13 @@ sim-sweep: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 sim-v1: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	iverilog -g2012 -Ptb_sd.V1=1 -o $(SIMBIN)_v1 -s tb_sd \
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
-	vvp $(SIMBIN)_v1
+	vvp $(SIMBIN)_v1 | $(SIMCHECK)
 
 # The real card's combination: v1 behavior AND a skewed reply.
 sim-v1skew: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	iverilog -g2012 -Ptb_sd.V1=1 -Ptb_sd.SKEW=2 -o $(SIMBIN)_v1s -s tb_sd \
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
-	vvp $(SIMBIN)_v1s
+	vvp $(SIMBIN)_v1s | $(SIMCHECK)
 
 sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew
 

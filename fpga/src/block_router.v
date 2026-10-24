@@ -204,9 +204,14 @@ module block_router #(
 
    reg pend_rd = 1'b0, pend_wr = 1'b0;   // explicit: this module has no rst
    // A parked request replays the instant the resolver is ready
-   // again.
-   wire do_rd = (blk_rd | pend_rd) & ~fs_busy;
-   wire do_wr = (blk_wr | pend_wr) & ~fs_busy;
+   // again. The spare table, the scratch buffer and the magic window
+   // never wait for it, the same exemption the parking test below
+   // makes. Without it, a request for one of them while the resolver
+   // is busy is neither parked nor served, and the confirm phase
+   // waits until the host gives up.
+   wire fs_wait = fs_busy && !(is_spare || is_rambuf || is_magic);
+   wire do_rd = (blk_rd | pend_rd) & ~fs_wait;
+   wire do_wr = (blk_wr | pend_wr) & ~fs_wait;
 
    always @(posedge clk) begin
       sd_rd <= 1'b0;

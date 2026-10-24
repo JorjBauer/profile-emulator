@@ -79,9 +79,8 @@ blobs. Then, in `fpga/`:
     make prog       load it into SRAM, volatile
     make flash      write it to the SPI flash
 
-`make sim` fails right now, and `sim-all` runs it first, so use
-`make -k sim-all` to see the rest. `fpga/README.md` has the full list of
-targets.
+`make sim-all` stops at the first bench that fails. `fpga/README.md` has the
+full list of targets.
 
 The ULX3S needs an interface board between it and the DB-25: two 74LVC245s
 that shift the 5V bus down to 3.3V. Mine was hand-wired on perfboard, and its
