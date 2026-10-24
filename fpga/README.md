@@ -1,26 +1,12 @@
 # ProFile emulator in an FPGA
 
-This is the Teensy-based ProFile emulator, moved to an FPGA. The FPGA
-answers the DB-25 protocol as a drive, serving blocks from an SD
-card. The Teensy version works, but is at the limits of what it can
-provide (required some clever optimization to work as it does). This
-is cheaper hardware, and should function better. Note that I
-specifically chose to make this a FPGA-only solution, not a
-FPGA-and-microcontroller solution, to keep the cost down; it did drive
-the complexity up.
+This is the FPGA version of the drive. It answers the ProFile's DB-25
+protocol and serves blocks from an SD card, on a ULX3S or on the r2 board in
+`hw-r2/`. The top-level README has the backstory and says where to start; this
+is the technical notebook.
 
-During development I built this for an Alchitry Cu (iCE40 HX); then
-when its carry chains became a bottleneck, moved to the Alchitry Au
-(Artix-7); and then moved to the ULX3S-12F (ECP5-12F). So when you see
-traces of comments or documentation about the iCE40HX or the Artix-7
-you'll know why. I've removed the build chain for those, but the code
-artifacts remain for the moment.
-
-Companion documents for this exist in my profile-dumper project
-(https://github.com/JorjBauer/profile-dumper). In particular, look at
-`PROTOCOL.md` (the wire protocol, and §9 for what the //e interface
-card actually does) and `HARDWARE.md` (DB-25 pinout, level shifting,
-data-bus bit order).
+`PROTOCOL.md` and `HARDWARE.md` below are the ones in
+[profile-dumper](https://github.com/JorjBauer/profile-dumper).
 
 ## Preparing the SD card: a file you have to create yourself
 
@@ -48,8 +34,9 @@ bails if it doesn't respond.
 ## Building it
 
 This builds with an open source toolchain: yosys, nextpnr-ecp5, and
-prjtrellis, all of which are part of oss-cad-suite. Source its
-environment first (`source ~/oss-cad-suite/environment`) and then
+prjtrellis, all of which are part of oss-cad-suite. The build also needs
+`node`, which imports the selector's blobs. Source oss-cad-suite's
+environment first (`source <wherever you unpacked it>/environment`) and then
 
     make            synthesize, place and route, pack
     make sim-all    the testbenches. Run these before touching hardware
@@ -142,8 +129,7 @@ holds a lot of files, which is why the images belong in `HD`.
 With both changes, build 10231827 (60.17 MHz against the 50 MHz target)
 serves the //e from a cold start. I couldn't measure how much margin is
 left. The //e's monitor takes longer to come up than the drive does, so
-there's nothing to time on the screen. Bring-up notes for the board
-itself are in `hw-r2/BRINGUP-r2.md`.
+there's nothing to time on the screen.
 
 ## Electrical: the bus is 5V, the FPGA is not
 

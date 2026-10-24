@@ -1,11 +1,13 @@
 # ProFile drive emulator (Teensy 4.1)
 
-In 2021 I built a profile dumper around a Teensy 4.1; this is the
-mirror image of that. Instead of pretending to be the Apple //e host
-(and reading a real ProFile), it pretends to be a ***ProFile drive***
-and answers a real Apple host (could be an Apple ][ series or an Apple
-///, although I've only tested this on an Apple //e). It serves block
-images from the built-in microSD.
+This is the Teensy 4.1 version of the drive, and the first one I built.
+It pretends to be a ***ProFile drive*** and answers a real Apple host (could
+be an Apple ][ series or an Apple ///, although I've only tested this on an
+Apple //e). It serves block images from the built-in microSD. The top-level
+README has the backstory.
+
+`PROTOCOL.md` below is the one in
+[profile-dumper](https://github.com/JorjBauer/profile-dumper).
 
 The ProFile card I used for testing here came with a ProFile 10, and
 is ROM version 341-0299-B. Despite coming with a 10MB drive, the ROM
