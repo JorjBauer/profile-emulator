@@ -6,12 +6,11 @@
 #   make flash    write SPI flash, so it survives a power cycle
 #   make stat     resource report only, yosys alone, no place and route
 #
-# The r1 board in hw/ builds from the same sources; see "the r1 board" below:
+# The r2 board in hw-r2/ builds from the same sources; see "the r2 board" below:
 #
-#   make r1           both r1 bitstreams, the flash copy and the SRAM copy
-#   make r1-prog      r1: load SRAM over JTAG (FT4232H on J4), volatile
-#   make r1-flash     r1: write the SPI flash over JTAG, through the FPGA
-#   make r1-flash-j6  r1: write the SPI flash through J6 with the D1 mini
+#   make r2           both r2 bitstreams, the flash copy and the SRAM copy
+#   make r2-prog      r2: load SRAM over JTAG (FT4232H on J4), volatile
+#   make r2-flash     r2: write the SPI flash over JTAG, through the FPGA
 #
 # The board is the ULX3S, wired to the interface board as described in
 # carrier/ULX3S-ADAPTER.md. The full design, recursion and all, fits with room
@@ -391,80 +390,25 @@ sim-v1skew: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 
 sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew
 
-# ---- the r1 board (hw/) -----------------------------------------------------
-# The same design on the same silicon in a TQFP-144, with its own pinout in
-# constraints/profile-drive.lpf. It gets its own project name so that an r1
-# build and a ULX3S build can sit side by side without clobbering each other.
-#
-# JTAG is an FT4232H module on J4, channel A, which the module labels as a
-# UART: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2), CTS to
-# TMS (pin 5), GND to pin 6, nothing on pin 1. The GuruPlug FT2232D adapter
-# reads garbage from this chip (IDCODE 0xfff80003), so don't use it here.
-#
-# There are two ways into the flash. r1-flash goes over JTAG through the FPGA,
-# the same as the ULX3S flash target, and it's the quick one. r1-flash-j6 is
-# the path from before JTAG worked. It is the one to fall back on if the FPGA
-# ever won't configure. It uses the D1 mini serprog sketch in
-# ~/bringup-r1/d1-serprog, sitting on the J6 header (G to 2, D2 to 3, D5 to 4,
-# D7 to 5, D6 to 6, D1 to 7, nothing on 1).
-#
-# The sketch holds PROGRAMN low from the moment it powers up, so a freshly
-# plugged-in D1 keeps the FPGA in reset until flashrom has run once. It floats
-# the pin when flashrom exits, and the FPGA reboots into the new image on its
-# own.
-#
-# flashrom wants a file exactly the size of the region it writes. So we pad
-# the bitstream to 1 MB with 0xFF and write a one-line layout for it. -N keeps
-# flashrom from verifying the other 15 MB, which would take about 25 minutes at
-# 115200 baud. The 1 MB it does verify is most of the five minutes.
-R1PROJ   := profile_emu_r1
-R1LPF    := constraints/profile-drive.lpf
-R1PKG    := TQFP144
-R1CABLE  ?= ft4232
-R1REGION := 0x100000
-SERPROG  ?= /dev/cu.usbserial-120
-SERBAUD  ?= 115200
-FLASHROM ?= /opt/homebrew/sbin/flashrom
-
-# If someone builds r1 the old way (make PROJ=profile_emu_r1 ...), then the
-# generic rules above already cover it, and defining it twice would only
-# earn "overriding recipe" warnings.
-ifneq ($(PROJ),$(R1PROJ))
-$(eval $(call ECP5_BUILD,$(R1PROJ),,$(R1LPF),$(R1PKG)))
-endif
-
-r1: $(R1PROJ).bit $(R1PROJ)_nextflash.bit
-
-r1-prog: $(R1PROJ)_nextflash.bit
-	openFPGALoader -c $(R1CABLE) $<
-
-r1-reload:
-	openFPGALoader -c $(R1CABLE) $(R1PROJ)_nextflash.bit
-
-r1-flash: $(R1PROJ).bit
-	openFPGALoader -c $(R1CABLE) -f $<
-
-r1-flash-j6: $(R1PROJ).bit
-	python3 -I -c "import sys; d=open(sys.argv[1],'rb').read(); n=int(sys.argv[3],0); assert len(d)<=n, 'bitstream is larger than the flash region'; open(sys.argv[2],'wb').write(d+b'\xff'*(n-len(d))); open(sys.argv[4],'w').write('000000:%06x boot\n'%(n-1))" $< $(R1PROJ)-1m.bin $(R1REGION) $(R1PROJ).layout
-	$(FLASHROM) -p serprog:dev=$(SERPROG):$(SERBAUD) --layout $(R1PROJ).layout -i boot:$(R1PROJ)-1m.bin -w -N
-
-CLEANFILES += $(R1PROJ)-1m.bin $(R1PROJ).layout
-
 # ---- the r2 board (hw-r2/) -------------------------------------------------
 # The same design again, wrapped in src/top_r2.v for the three pins r2 added
 # (U3's /OE, the reboot line, and holding U2 off until a host appears), with
-# its own pinout in constraints/profile-drive-r2.lpf. Do NOT load an r1 image
-# into an r2 board: r1's pinout drives pins that are wired differently here.
+# its own pinout in constraints/profile-drive-r2.lpf. It gets its own project
+# name so that an r2 build and a ULX3S build can sit side by side without
+# clobbering each other.
 #
-# JTAG is the same as r1: the FT4232H on J4, channel A, nothing on pin 1. The
-# board is powered from USB-C, never from J4.
+# JTAG is an FT4232H module on J4, channel A, which the module labels as a
+# UART: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2), CTS to
+# TMS (pin 5), GND to pin 6, nothing on pin 1. The board is powered from
+# USB-C, never from J4.
 R2PROJ   := profile_emu_r2
 R2LPF    := constraints/profile-drive-r2.lpf
+R2PKG    := TQFP144
 R2CABLE  ?= ft4232
 
 # r2 races the //e at power-on. The card ROM checks for the drive about 0.6 s
-# after autostart reaches the slot, and it does not ask twice. Two things go
-# faster here than on r1.
+# after autostart reaches the slot, and it does not ask twice. Two settings
+# make the r2 build come up faster.
 #
 # First, the part reads its flash at 62 MHz, ecppack's top rate (the W25Q128
 # does 133). That takes the 348 KB load from about 72 ms to about 45.
@@ -479,7 +423,7 @@ R2PARAMS := -set SD_DIV_INIT 62
 $(R2PROJ).bit: FLASHFREQ := 62.0
 
 ifneq ($(PROJ),$(R2PROJ))
-$(eval $(call ECP5_BUILD,$(R2PROJ),$(R2PARAMS),$(R2LPF),$(R1PKG),src/top_r2.v,top_r2))
+$(eval $(call ECP5_BUILD,$(R2PROJ),$(R2PARAMS),$(R2LPF),$(R2PKG),src/top_r2.v,top_r2))
 endif
 
 r2: $(R2PROJ).bit $(R2PROJ)_nextflash.bit
@@ -564,7 +508,7 @@ clean:
 	rm -f $(CLEANFILES) $(BLOBS) .build_id
 
 .PHONY: all blobs prog reload flash stat ecp5 ecp5-prog ecp5-reload ecp5-flash ecp5-stat \
-        r1 r1-prog r1-reload r1-flash r1-flash-j6 r2 r2-prog r2-reload r2-flash \
+        r2 r2-prog r2-reload r2-flash \
         sim sim-iie sim-iie-late sim-iie-fast sim-iie-32mb sim-sd sim-geom sim-verify \
         sim-verify-stride sim-retry sim-retry-exhaust sim-usb-prov sim-router-race \
         sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-fat32-lru \

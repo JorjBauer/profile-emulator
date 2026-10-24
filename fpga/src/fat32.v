@@ -220,11 +220,11 @@ module fat32 #(
    reg [5:0]  seq_cand;     // sequence number of the LFN entry being read
    // (seq_cand - 1) * 13 is the name-buffer slot where this LFN entry's
    // first character lands. We used to recompute that product in every
-   // path that needs it. On the r1 build it was the slowest path in
-   // the whole design (19.5 ns of a 20 ns period). Now it's computed
-   // once, when the entry's sequence byte arrives, and the character
-   // paths just add their slot to it. Same 7-bit wrap as the expression
-   // it replaces, so nothing downstream changes.
+   // path that needs it. On an earlier TQFP144 build it was the slowest
+   // path in the whole design (19.5 ns of a 20 ns period). Now it's
+   // computed once, when the entry's sequence byte arrives, and the
+   // character paths just add their slot to it. Same 7-bit wrap as the
+   // expression it replaces, so nothing downstream changes.
    reg [6:0]  lfn_base;
    reg        is_lfn;       // ...confirmed once its attribute byte arrives
 

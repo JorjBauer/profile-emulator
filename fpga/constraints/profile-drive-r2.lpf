@@ -1,8 +1,8 @@
 # ProFile drive replacement r2, LFE5U-12F TQFP144.
 # Pin assignments follow hw-r2/profile-drive/profile-drive.kicad_pcb.
 # The top module is top_r2 (src/top_r2.v), which wraps top and adds the three
-# pins r1 does not have: u3_oe_n, fpga_reboot, and the gated xcvr_oe_n.
-# Build exactly like r1: --25k, then ecppack --idcode 0x21111043.
+# pins the ULX3S build does not have: u3_oe_n, fpga_reboot, and the gated
+# xcvr_oe_n. Build with --25k, then ecppack --idcode 0x21111043.
 # TQFP144 sites are plain pin numbers.
 
 BLOCK RESETPATHS;

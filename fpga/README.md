@@ -41,7 +41,9 @@ avoids all that complexity.
 
 The images must be in a directory named `HD` as a practical matter;
 the more stuff the descender has to enumerate, the longer it takes for
-this device to boot.
+this device to boot. We have about 0.58s before the Apple ][ ProFile card
+ROM gives up; unlike some other cards, it makes one STATUS request and then
+bails if it doesn't respond.
 
 ## Building it
 
@@ -60,14 +62,15 @@ environment first (`source ~/oss-cad-suite/environment`) and then
 `make stat` needs nothing but yosys, which makes it the fastest way to see
 whether a change still fits.
 
-**SRAM and flash get different bitstreams, and this is not optional.** The flash
-copy is compressed and configured for fast-read at 38.8 MHz (62 MHz on r2). An
-uncompressed stream takes about 2.25 s to load and loses the power-on race
-against the //e on its own. Compressed, the same load is about 70 ms. Loading
-that same compressed flavor into SRAM over JTAG makes the ECP5's config engine
-abort with `BSE Abort ERR` and leaves the device blank. `make prog` therefore
-builds and loads the uncompressed `_nextflash.bit`, and `make flash` the
-compressed one. Both work via `fujprog`.
+**SRAM and flash get different bitstreams.** The flash copy is
+compressed and configured for fast-read at 38.8 MHz (62 MHz on r2). An
+uncompressed stream takes about 2.25 s to load and loses the power-on
+race against the //e. Compressed, the same load is about 70 ms.
+Loading that same compressed flavor into SRAM over JTAG makes the
+ECP5's config engine abort with `BSE Abort ERR` and leaves the device
+blank. `make prog` therefore builds and loads the uncompressed
+`_nextflash.bit`, and `make flash` the compressed one. Both work via
+`fujprog`.
 
 There is one more ECP5 wrinkle worth knowing: this is built as an
 ECP5-25F, but I'm using an ECP5-12F to serve it. They're the same
@@ -82,41 +85,11 @@ exercise-prog` (a known pattern on the DB-25 with no host) and `make
 stream-prog SBLOCK=n` (a real block onto the DB-25 with no host). Each
 is described in its own section below.
 
-### Building for the r1 board
-
-The r1 board in `hw/` is this same design on an LFE5U-12F in a
-TQFP-144, and `constraints/profile-drive.lpf` matches its PCB pin for
-pin. It builds next to the ULX3S flavor under its own name:
-
-    make r1             both bitstreams: the compressed flash copy and the SRAM copy
-    make r1-prog        load SRAM over JTAG, volatile
-    make r1-reload      the same with no rebuild
-    make r1-flash       write the SPI flash over JTAG, through the FPGA
-    make r1-flash-j6    write the SPI flash through J6 with the D1 mini serprog
-
-JTAG is an FT4232H module on J4, channel A, under the module's UART
-labels: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2),
-CTS to TMS (pin 5), GND to pin 6, nothing on pin 1. The GuruPlug FT2232D
-adapter reads garbage from this ECP5; don't use it. Both JTAG targets
-work. The serprog path through J6 is the fallback for a board whose
-FPGA won't configure: it takes about five minutes (most of it the
-verify) and reboots the FPGA into the new image when flashrom exits.
-`SERPROG=` and `R1CABLE=` on the make line override the serprog's port
-and the cable name.
-
-After any rebuild for r1, read the catalog back (the dumper's `K`, or a
-window read of `$FFFF80`) rather than trusting the boot alone. The
-first r1 build met timing at 51.3 MHz against the 50 MHz target and
-passed every simulation. On the board, every catalog record carried the
-first image's block count. The critical path was the long-name slot
-multiply in `fat32.v`. Registering it once per entry (`lfn_base`) moved
-the build to 58.5 MHz, and the catalog was right.
-
 ### Building for the r2 board
 
-The r2 board in `hw-r2/` is the same design again, on the same LFE5U-12F
-TQFP-144, with its own pinout in `constraints/profile-drive-r2.lpf`. r2 added
-three pins the other boards don't have, so its top module is `src/top_r2.v`,
+The r2 board in `hw-r2/` is this same design on an LFE5U-12F in a
+TQFP-144, with its own pinout in `constraints/profile-drive-r2.lpf`. r2 has
+three pins the ULX3S build doesn't, so its top module is `src/top_r2.v`,
 which wraps `top` and leaves every other build alone:
 
 - **U3_OE_N** (pin 76) enables U3, the buffer for the host's control lines.
@@ -129,19 +102,24 @@ which wraps `top` and leaves every other build alone:
   nextpnr turns that into a driven pin, and low there reboots the part over
   and over.
 
-The targets are the same shape as r1's:
+It builds next to the ULX3S flavor under its own name:
 
     make r2             both bitstreams
     make r2-prog        load SRAM over JTAG, volatile
     make r2-reload      the same with no rebuild
     make r2-flash       write the SPI flash over JTAG, through the FPGA
 
-JTAG is wired exactly as on r1 (the FT4232H on J4, channel A, nothing on
-pin 1; `R2CABLE=` overrides the cable). Power the board from USB-C, not
-from J4. **Never load an r1 image into r2:** r1's pinout drives pins that are
-wired differently on r2.
+JTAG is an FT4232H module on J4, channel A, under the module's UART
+labels: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2),
+CTS to TMS (pin 5), GND to pin 6, nothing on pin 1. `R2CABLE=` overrides
+the cable name. Power the board from USB-C, not from J4.
 
-r2 boots faster than r1. The first r2 build lost the power-on race on a
+After any rebuild, read the catalog back (the dumper's `K`, or a window
+read of `$FFFF80`) rather than trusting the boot alone. A build can meet
+timing and pass every simulation and still serve a wrong catalog (see the
+fat32 note under "Known bring-up items").
+
+The first r2 build lost the power-on race on a
 cold start. The //e's card ROM looks for the drive about 0.6 s after
 autostart reaches the slot, and if /PBSY or PCHK is wrong it skips the slot
 and never asks again. Two things changed, both only for r2:
@@ -579,9 +557,9 @@ volume's real size from the image, not from the drive or driver.
   documented as idling asserted on some setups, and honoring it there pins the
   whole design in reset, which looks exactly like a board that does nothing.
   If the //e tries to reset the drive, we will not notice. In practice this never happens.
-- **The fat32 scanner is the critical path.** On the first r1 build it was
-  19.5 ns of a 20 ns period and the catalog was wrong on hardware while
-  every bench passed. `lfn_base` in `fat32.v` is the fix. The margin is
+- **The fat32 scanner is the critical path.** On an earlier TQFP144 build
+  it was 19.5 ns of a 20 ns period and the catalog was wrong on hardware
+  while every bench passed. `lfn_base` in `fat32.v` is the fix. The margin is
   now about 17%. If a rebuild ever shows every catalog record with the
   same block count, suspect timing before logic.
 - **The SELECT reply byte is not to be trusted.** `selector.v` answers `$00`
@@ -618,8 +596,8 @@ reports a lower figure than the router's final one (47.79 against
 looks like a failure when it is not. Do not read a seed sweep off the
 placement figure.
 
-On r1 (TQFP144, 2026-10-09) the same sources route at 58.47 MHz with the
-`lfn_base` change, against 51.29 MHz without it.
+On r2 (TQFP144, 2026-10-24) the same sources route at 60.17 MHz. Before
+the `lfn_base` change, an earlier TQFP144 build routed at 51.29 MHz.
 
 **A 12F is enough.** A ULX3S sold as a 12F carries 25F silicon and
 must be targeted as `--25k`, which is what the numbers above are

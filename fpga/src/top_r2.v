@@ -1,6 +1,6 @@
-// top_r2: the r2 board (hw-r2/) wrapped around the same top as r1 and the
-// ULX3S. r2 added three pins that the other boards do not have, and putting
-// them here keeps top.v, and every other build, exactly as it was.
+// top_r2: the r2 board (hw-r2/) wrapped around the same top as the ULX3S.
+// r2 added three pins that the ULX3S does not have, and putting them here
+// keeps top.v, and every other build, exactly as it was.
 //
 //   u3_oe_n      U3's /OE (U1 pin 76, R53 pulls it high). U3 buffers the
 //                host's control lines. It stays disabled until the FPGA is
