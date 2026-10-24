@@ -1,0 +1,104 @@
+# ProFile drive replacement r2, LFE5U-12F TQFP144.
+# Pin assignments follow hw-r2/profile-drive/profile-drive.kicad_pcb.
+# The top module is top_r2 (src/top_r2.v), which wraps top and adds the three
+# pins r1 does not have: u3_oe_n, fpga_reboot, and the gated xcvr_oe_n.
+# Build exactly like r1: --25k, then ecppack --idcode 0x21111043.
+# TQFP144 sites are plain pin numbers.
+
+BLOCK RESETPATHS;
+BLOCK ASYNCPATHS;
+
+# AUX7 was dropped on r2 and pin 104 is open; pull it up so it reads
+# deasserted (SmartPort /ENABLE1 is active low).
+LOCATE COMP "aux7"  SITE "104";
+IOBUF  PORT "aux7"  PULLMODE=UP IO_TYPE=LVCMOS33;
+LOCATE COMP "clk"  SITE "128";
+IOBUF  PORT "clk"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[0]"  SITE "1";
+IOBUF  PORT "led[0]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[1]"  SITE "2";
+IOBUF  PORT "led[1]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[2]"  SITE "3";
+IOBUF  PORT "led[2]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[3]"  SITE "4";
+IOBUF  PORT "led[3]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[4]"  SITE "5";
+IOBUF  PORT "led[4]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[5]"  SITE "6";
+IOBUF  PORT "led[5]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[6]"  SITE "7";
+IOBUF  PORT "led[6]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "led[7]"  SITE "10";
+IOBUF  PORT "led[7]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pbsy_n"  SITE "105";
+IOBUF  PORT "pbsy_n"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pchk"  SITE "107";
+IOBUF  PORT "pchk"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pcmd_n"  SITE "97";
+IOBUF  PORT "pcmd_n"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[0]"  SITE "88";
+IOBUF  PORT "pd[0]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[1]"  SITE "89";
+IOBUF  PORT "pd[1]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[2]"  SITE "90";
+IOBUF  PORT "pd[2]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[3]"  SITE "91";
+IOBUF  PORT "pd[3]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[4]"  SITE "92";
+IOBUF  PORT "pd[4]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[5]"  SITE "93";
+IOBUF  PORT "pd[5]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[6]"  SITE "94";
+IOBUF  PORT "pd[6]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pd[7]"  SITE "95";
+IOBUF  PORT "pd[7]"  IO_TYPE=LVCMOS33;
+LOCATE COMP "ph0"  SITE "103";
+IOBUF  PORT "ph0"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pparity"  SITE "106";
+IOBUF  PORT "pparity"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pres_n"  SITE "102";
+IOBUF  PORT "pres_n"  IO_TYPE=LVCMOS33;
+LOCATE COMP "prw"  SITE "99";
+IOBUF  PORT "prw"  IO_TYPE=LVCMOS33;
+LOCATE COMP "pstrb_n"  SITE "98";
+IOBUF  PORT "pstrb_n"  IO_TYPE=LVCMOS33;
+LOCATE COMP "sd_cd_n"  SITE "114";
+IOBUF  PORT "sd_cd_n"  IO_TYPE=LVCMOS33;
+LOCATE COMP "sd_clk"  SITE "112";
+IOBUF  PORT "sd_clk"  IO_TYPE=LVCMOS33;
+LOCATE COMP "sd_cs_n"  SITE "110";
+IOBUF  PORT "sd_cs_n"  IO_TYPE=LVCMOS33;
+LOCATE COMP "sd_miso"  SITE "113";
+IOBUF  PORT "sd_miso"  IO_TYPE=LVCMOS33;
+LOCATE COMP "sd_mosi"  SITE "111";
+IOBUF  PORT "sd_mosi"  IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_tx"  SITE "135";
+IOBUF  PORT "usb_tx"  IO_TYPE=LVCMOS33;
+LOCATE COMP "xcvr_dir"  SITE "73";
+IOBUF  PORT "xcvr_dir"  IO_TYPE=LVCMOS33;
+LOCATE COMP "xcvr_oe_n"  SITE "74";
+IOBUF  PORT "xcvr_oe_n"  IO_TYPE=LVCMOS33;
+
+# top.v ports with no role on this board, parked on unrouted pins
+# (the same trick as usb_tx_alt on the ULX3S).
+LOCATE COMP "rst_n"      SITE "133";
+IOBUF  PORT "rst_n"      PULLMODE=UP IO_TYPE=LVCMOS33;
+LOCATE COMP "usb_tx_alt" SITE "134";
+IOBUF  PORT "usb_tx_alt" IO_TYPE=LVCMOS33;
+# sd_wp_n: microSD has no write-protect switch; internal pullup
+# reads permanently not-protected (HONOR_WP is 0 in RTL anyway).
+LOCATE COMP "sd_wp_n"    SITE "115";
+IOBUF  PORT "sd_wp_n"    PULLMODE=UP IO_TYPE=LVCMOS33;
+
+# usb_rx: J5 pin 3, UART_RX. It floats with no adapter on J5.
+LOCATE COMP "usb_rx"     SITE "136";
+IOBUF  PORT "usb_rx"     PULLMODE=UP IO_TYPE=LVCMOS33;
+
+# r2 only, driven by top_r2.v.
+# U3's /OE: R53 holds it high until we are configured, then we drive it low.
+LOCATE COMP "u3_oe_n"     SITE "76";
+IOBUF  PORT "u3_oe_n"     IO_TYPE=LVCMOS33;
+# To PROGRAMN through R48. Low reboots the part; it must never go high.
+# An input with no pull, so it cannot drive either way (see top_r2.v).
+LOCATE COMP "fpga_reboot" SITE "67";
+IOBUF  PORT "fpga_reboot" PULLMODE=NONE IO_TYPE=LVCMOS33;
