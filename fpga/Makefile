@@ -224,8 +224,8 @@ sim-iie-fast: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 
 # The decoupled-geometry case through the HOST's path: a 65535-block image,
 # which can only ever claim $FFFC, reading a block above that claim. This is the
-# full 32MB ProDOS volume (Total Recall and friends) and it's the only geometry
-# that cannot be fixed by resizing the image.
+# full 32MB ProDOS volume (Total Replay and friends), and it's the only geometry
+# that can't be fixed by resizing the image.
 sim-iie-32mb: sim/tb_top_iie.v sim/sd_model.v $(SIMSRC) $(BLOBS)
 	iverilog -g2012 -Ptb_top_iie.IMG_BLOCKS=65535 \
 	  -o $(SIMBIN)_iie32 -s tb_top_iie sim/tb_top_iie.v sim/sd_model.v $(SIMSRC)
