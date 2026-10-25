@@ -112,9 +112,9 @@ away than that decoupling alone was sized for.
 ## Why is there an extra SD card socket?
 
 This map uses its own SD socket; the ULX3S has one, but this prototype
-is about testing the hardware that we'll be using for the final
-PCB. Since that's not the ULX3S itself I decided to build around a
-second, dedicated, SD card socket. The prototype here uses a full SD
-carrier; the final board uses a microSD that doesn't have (for
-example) card detected capability (I'm going with the cheapest parts I
-can find, it seems a small sacrifice).
+was about testing the hardware that the real PCB would use. Since that's
+not the ULX3S itself I decided to build around a second, dedicated, SD
+card socket. The prototype here uses a full SD carrier with card-detect
+and write-protect contacts. The r2 board uses a microSD socket (J3),
+which wires its card-detect switch to the FPGA but has no write-protect
+switch, since microSD cards don't have one.

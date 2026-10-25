@@ -99,7 +99,7 @@ uint32_t imageBlocks  = 0;
 //
 // Serve every block the image really has, while continuing to CLAIM the aligned,
 // boot-safe count. The case that needs it is a full 32MB ProDOS volume (65535
-// blocks, e.g. Total Recall): three blocks too many AND misaligned, so it can never
+// blocks, e.g. Total Replay): three blocks too many AND misaligned, so it can never
 // be claimed, and if the volume is full it cannot be shrunk to fit either.
 //
 // Why this works at all: the multiple-of-4 rule is ONE instruction in the ROM's

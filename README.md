@@ -11,9 +11,11 @@ the drive's contents into a disk image. That's
 [profile-dumper](https://github.com/JorjBauer/profile-dumper), and the build
 log is on [Hackaday](https://hackaday.io/project/179930-apple-profile-10mb-hard-drive-reader).
 
-In 2026 I turned it around. The Teensy version in `teensy/` pretends to be the
-drive instead of the host, and it works on my //e. But it's at the limit of
-what the Teensy can do, and it took some clever optimization to get there.
+At the same time, I hand-wired a second Teensy board meant to turn that around
+and pretend to be the drive instead of the host. Its code wasn't finished
+until 2026. That's the Teensy version in `teensy/`, and it works on my //e.
+But it's at the limit of what the Teensy can do, and it took some clever
+optimization to get there.
 
 So I moved it to an FPGA. I chose to make it FPGA-only, with no
 microcontroller, to keep the cost down. That drove the complexity up. I started
@@ -41,6 +43,7 @@ haven't tried an Apple ///.
   - `carrier/ULX3S-ADAPTER.md`: wiring the interface board to a ULX3S.
   - `hw-r2/profile-drive/`: the r2 board. The KiCad project, the Gerber and
     stencil zips, a placement sheet and an assembly drawing.
+  - `hw-r2/BRINGUP-r2.md`: building an r2 board and bringing it up.
   - `hw-r2/enclosure/`: a printed case shaped like a tiny ProFile.
 - `teensy/`: the Teensy 4.1 version. It still works.
 - `selector/`: a submodule with the 6502 boot menu that both versions serve,
@@ -98,6 +101,10 @@ Everything is in `fpga/hw-r2/profile-drive/`.
   zip bridged their fine-pitch pins on my board. I ordered it in 4 mil
   stainless.
 - Every part is on the top side.
+- The silkscreen labels are 0.8 mm tall. That's below JLCPCB's standard 1.0 mm
+  minimum, and at their limit for high-precision silkscreen (0.8 mm text with
+  a 0.1 mm stroke), so ask for high-precision if you want the smallest labels
+  crisp.
 
 If you want JLCPCB to assemble it, upload these two as well:
 
@@ -147,7 +154,8 @@ goes, marks pin 1 (and each LED's cathode) in red, and has a checklist BOM with
 quantities and part numbers. `assembly-r2.pdf` puts the values on the
 footprints. Use the reduced stencil.
 
-I haven't published a bring-up checklist yet.
+`fpga/hw-r2/BRINGUP-r2.md` walks through the rest: paste and reflow,
+inspection, checking the power rails, first power, and programming.
 
 ### Reflashing an r2 board over JTAG
 

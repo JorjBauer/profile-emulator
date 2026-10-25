@@ -137,8 +137,8 @@ Note in particular:
 ### Shrinking an image that is too big
 
 A 32MB image that you didn't build is probably the wrong size:
-anything over 65532 blocks, or any block count that is a multiple of
-4. The firmware won't choke on it; it rounds the claimed geometry down
+anything over 65532 blocks, or any block count that isn't a multiple
+of 4. The firmware won't choke on it; it rounds the claimed geometry down
 to a multiple of 4 and caps it at `$FFFC`, so the //e still boots. But
 that only fixes what the *drive* reports: the ProDOS volume inside the
 image still believes its original block count, and blocks above the

@@ -196,7 +196,21 @@ Check the FPGA answers:
 
     openFPGALoader -c ft4232 --detect
 
-It should report IDCODE `0x21111043`, the LFE5U-12F. Then, in `fpga/`:
+It should report IDCODE `0x21111043`, the LFE5U-12F. If it doesn't:
+
+- **All 1s (`0xffffffff`) or all 0s:** nothing is answering on TDO. Check
+  the clip is seated on all six pads, GND is connected, and the board is
+  powered from USB-C. Then check the wiring against the table, especially
+  RXD and RTS: TDI and TDO swapped is the easy mistake.
+- **No device found, or the cable won't open:** openFPGALoader uses channel
+  A of the FT4232H. Make sure you wired that channel, and that nothing else
+  (a serial terminal, say) has the port open.
+- **Some other IDCODE:** a buffered JTAG adapter can need an enable line
+  driven before it passes signals through, and it can return a garbled
+  IDCODE until it gets one. A plain FT4232H or FT2232H module doesn't have
+  that problem.
+
+Then, in `fpga/`:
 
     make r2-prog     build and load it into SRAM, volatile
     make r2-flash    write it to the SPI flash
@@ -217,6 +231,33 @@ fitted the LEDs:
 
 If you fitted J5 too, a 3.3 V serial adapter on it (pin 1 GND, pin 2 TX,
 pin 3 RX, 115200 8N1) shows the drive's report, starting with its build ID.
+
+### Programming the flash through J6 instead
+
+You don't need this, since JTAG can write the flash. J6 is there in case
+JTAG isn't working, or you'd rather use an SPI flash programmer. Its pins:
+
+| J6 | signal |
+|---|---|
+| 1 | +3V3, for the programmer's reference only; don't power the board from it |
+| 2 | GND |
+| 3 | flash /CS |
+| 4 | flash CLK (through R43) |
+| 5 | flash MOSI (DI) |
+| 6 | flash MISO (DO) |
+| 7 | PROGRAMN |
+
+The FPGA shares those SPI lines, so PROGRAMN (pin 7) has to be held low the
+whole time the programmer is writing. Holding SW1 down does the same thing.
+Letting go makes the FPGA reload from the new image. Power the board from
+USB-C as usual.
+
+Any 3.3 V programmer that flashrom supports will work. On r1 I used a D1
+mini running a serprog sketch that held PROGRAMN low itself. Write
+`profile_emu_r2.bit`, the compressed flash flavor that `make r2` builds, at
+the start of the flash. flashrom wants an image the size of the chip or a
+layout region, so pad the file out to a round size (1 MB is plenty) and
+write just that region. The W25Q128 should identify as JEDEC ID `0xef4018`.
 
 ## Putting it in service
 

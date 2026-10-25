@@ -159,8 +159,8 @@ not 5v tolerant and the ProFile bus is 5V TTL.
                 |
              sd_spi  ->  SD card  (SPI mode, CMD17/CMD24)
 
-`reporter` streams the whole diagnostic state out the FTDI serial port; it is
-not in the data path.
+`reporter` streams the whole diagnostic state out the serial port (the
+ULX3S's USB serial, or J5 on r2); it is not in the data path.
 
 Module by module:
 
@@ -177,9 +177,8 @@ Module by module:
 - **`block_router`** decodes the 24-bit block number: normal blocks to the SD
   reader, `$FFFFFE` to the RAM buffer, `$FFFFFF` to the synthesized spare table,
   and the `$FFFF00-$FFFFFD` selector window.
-- **`sd_spi`** is a plain SPI block reader, talking to a full-size SD socket
-  that a microSD sits in via an adapter: init at 100 kHz (397 kHz on r2), run at the measured
-  rates in the table below, CMD17 single-block read and CMD24 write. **Both
+- **`sd_spi`** is a plain SPI block reader: init at 100 kHz (397 kHz on r2),
+  run at the measured rates in the table below, CMD17 single-block read and CMD24 write. **Both
   card generations work.** SDHC addresses by block; a card that rejects CMD8 is
   treated as v1, ACMD41 goes out without HCS, CCS comes from the OCR, and CMD17
   arguments are scaled by 512. `make sim-v1` and `make sim-v1skew` are that
@@ -334,12 +333,13 @@ The comparison is case-folded on both sides.
 asked for in lower case, with autopick turned off so that resolving at
 all is the name match and not a fallback.
 
-**Which image wins: NONE, unless something chose it.** `SELECTOR.md`
+**Which image wins: NONE, unless something chose it.** `../selector/SELECTOR.md`
 is explicit that the drive "will not invent a default and boot it
 without showing the menu", so that a stale or missing configuration can
 never cause the wrong volume to be served. With images present but no
 selection, `fat32.v` reports `need_select` and `E_NOSEL` and the drive
-serves no media. `make sim-fat32-noauto` is that test.
+serves no media. With no `profile.cfg` at all it does the same, but reports
+`E_NOCFG`. `make sim-fat32-noauto` tests that case.
 
 `AUTOPICK` will automatically select the largest image it finds and is
 used for bench testing: `make sim-fat32` and `tb_top_sd` use this,
@@ -410,10 +410,6 @@ window's edges are right (`$FFFFFD` ours, `$FFFFFE` and `$FFFFFF` not,
 holding the flags, 48 characters of name and the block count. Names
 are captured through the long-name entries where there are any, and
 folded to upper case.
-
-Similarly, an entry with only 8.3 and no LFN is compacted on the way
-in, so the on-disk `A2OSX IMG` becomes `A2OSX.IMG` and everything
-downstream sees one kind of name.
 
 ## The serial report
 
@@ -555,9 +551,6 @@ volume's real size from the image, not from the drive or driver.
   starts zeroes `img_count` while the reply is still being produced. This
   has not been chased down. Confirm a select from the spare table's block
   count instead.
-- **`make sim` fails at HEAD** ("phase-2 response: got $zz, expected $02")
-  and did before the fat32 change. `make sim-iie`, the strict //e bench,
-  passes. Not looked into.
 
 ## Status
 
@@ -582,8 +575,10 @@ reports a lower figure than the router's final one (47.79 against
 looks like a failure when it is not. Do not read a seed sweep off the
 placement figure.
 
-On r2 (TQFP144, 2026-10-24) the same sources route at 60.17 MHz. Before
-the `lfn_base` change, an earlier TQFP144 build routed at 51.29 MHz.
+On r2 (TQFP144) the same sources route at 54 to 60 MHz, depending on the
+run: 60.17 MHz for build 10231827, and 54.89 MHz on 2026-10-24 after the
+`block_router` fix. nextpnr's result moves from build to build. Before the
+`lfn_base` change, an earlier TQFP144 build routed at 51.29 MHz.
 
 **A 12F is enough.** A ULX3S sold as a 12F carries 25F silicon and
 must be targeted as `--25k`, which is what the numbers above are
@@ -627,7 +622,7 @@ them.
 | `sim-fat32` | finding the image and resolving a chain the model deliberately fragments (4, 6, 5, 7). A resolver that assumed contiguity fails on block 1 |
 | `sim-fat32-flat` | the same card and config with `FS_RECURSE=0` |
 | `sim-fat32-83` | an image with no long name at all, asked for in lower case, with autopick OFF so that resolving at all is the name match |
-| `sim-fat32-noauto` | images present and none configured: serve nothing and report `E_NOCFG`, rather than inventing a default |
+| `sim-fat32-noauto` | images present and no `profile.cfg`: serve nothing and report `E_NOCFG`, rather than inventing a default |
 | `sim-fat32-persist` | the write-back. Needs a selection that really changes, and has to wait: `ready` goes high before the persist runs |
 | `sim-fat32-lru` | the LRU-2 chain cache: an ephemeral reselect between two images costs zero SD reads and serves each image's own chain |
 
@@ -641,9 +636,9 @@ them.
 
 Two things to know before you run them:
 
-- **Read the output, not the exit code.** A bench prints `PASS` or `FAIL` and
-  then finishes with status 0 either way, so `make sim-all` completes
-  successfully regardless of what happened inside it.
+- **A failing bench fails make.** Each bench prints `PASS` or `FAIL`, and the
+  Makefile checks for those lines, because `vvp` exits 0 either way. So
+  `make sim-all` stops at the first failure; `make -k sim-all` runs the rest.
 - **`sim-iie-late` is not in `sim-all` and is expected to fail.** It reproduces
   a known defect rather than guarding against a regression, and it does not
   terminate on its own; interrupt it.
@@ -721,11 +716,12 @@ the state it stopped in. That is more useful than the error code: it says which
 command never got an answer. led[5] blinking with nothing else lit means the part
 is configured and running but the card is not answering.
 
-The SD clock starts at 100 kHz (397 kHz on r2) to bring the card up and then moves to the rates
-in the table further up: 8.33 MHz for reads, 391 kHz for writes. Those are
-measured on this harness, not chosen. The socket is off-board on flying leads
-through 33R series resistors, which is the most likely reason writes stop an
-order of magnitude below reads.
+The SD clock starts at 100 kHz (397 kHz on r2) to bring the card up and then
+moves to the rates in the table further up: 8.33 MHz for reads, 391 kHz for
+writes. Those were measured on the ULX3S harness, where the socket was
+off-board on flying leads through 33R series resistors, which is the most
+likely reason writes stop an order of magnitude below reads. r2 has its socket
+on the board and still uses the same rates, because it hasn't been swept.
 
 ### The other bench test: the reader, not the //e
 
