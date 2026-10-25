@@ -186,7 +186,15 @@ module top #(
              // See block_stream.v.
              parameter         STREAM_ENABLE   = 1'b0,
              parameter [23:0]  STREAM_BLOCK    = 24'd0,
-             parameter integer STREAM_DWELL_US = 20
+             parameter integer STREAM_DWELL_US = 20,
+             // Rewrite the configuration flash from a file on the SD card, and
+             // reboot into it. r2 only, since it needs the flash pins and the
+             // line to PROGRAMN. See src/fw_update.v for the file and the
+             // flash layout.
+             parameter         UPDATE_ENABLE = 1'b0,
+             parameter [87:0]  UPDATE_NAME   = "R2UPDATEBIN",
+             parameter [31:0]  UPDATE_BOARD  = "R2  ",
+             parameter [23:0]  UPDATE_GOLDEN = 24'h100000
              ) (
                 input  wire        clk,
                 input  wire        rst_n,
@@ -220,7 +228,16 @@ module top #(
                 output wire [7:0]  led,          // the dev board's own LEDs; see below
                 output wire        usb_tx,       // to the board's USB serial, 115200 8N1
                 input  wire        usb_rx,       // the other direction: bench command channel
-                output wire        usb_tx_alt    // the other candidate ball; see below
+                output wire        usb_tx_alt,   // the other candidate ball; see below
+
+                // The configuration flash once we're running, for the SD
+                // update, and the line to PROGRAMN that reboots us after it.
+                // With UPDATE_ENABLE off, /CS sits high and the reboot line
+                // is never driven.
+                output wire        flash_csn,
+                output wire        flash_mosi,
+                input  wire        flash_miso,
+                inout  wire        fpga_reboot
                 );
 
    // Internal versions of every pin the diagnostic can take over. Declared
@@ -490,6 +507,17 @@ module top #(
    // wiring reads unchanged.
    wire             fs_fire, sd_own_fs;
    wire             r_fire_rd, r_fire_wr, r_done, r_err, f_done, f_err;
+   // The firmware updater is the arbiter's third master. upd_active means it
+   // has taken the drive: the protocol target is held in reset until the
+   // reboot, or until a failure hands the drive back.
+   wire             up_req, up_fire, up_done, up_err, sd_own_up;
+   wire [31:0]      up_lba;
+   wire             upd_active;
+   wire [3:0]       upd_err;
+   wire [15:0]      upd_progress, upd_total;
+   wire [1:0]       upd_phase;
+   wire [31:0]      upd_build;
+   wire [31:0]      fs_root_clus;
    // (the sd_arb instance lives below, after sd_rd/sd_wr are declared)
    wire [7:0]       sd_retries;
 
@@ -585,7 +613,7 @@ module top #(
    // drive that does not answer. The block buffer and the resolved image
    // survive.
    wire       pres_rst = 1'b0;   // see HONOR_PRES_TGT
-   wire       tgt_rst = rst | pres_rst | EXERCISE_ENABLE | STREAM_ENABLE;
+   wire       tgt_rst = rst | pres_rst | EXERCISE_ENABLE | STREAM_ENABLE | upd_active;
 
    profile_target u_target (
                             .clk(clk_sys), .rst(tgt_rst), .dbg_frame(dbg_frame), .dbg_walk(dbg_walk), .dbg_badframe(dbg_badframe),
@@ -1100,18 +1128,21 @@ module top #(
                  .r_fire_rd(r_fire_rd), .r_fire_wr(r_fire_wr),
                  .r_done(r_done), .r_err(r_err),
                  .f_req(fs_req), .f_req_wr(fs_req_wr), .f_fire(fs_fire),
-                 .f_done(f_done), .f_err(f_err), .own_fs(sd_own_fs));
+                 .f_done(f_done), .f_err(f_err),
+                 .u_req(up_req), .u_fire(up_fire), .u_done(up_done), .u_err(up_err),
+                 .own_fs(sd_own_fs), .own_up(sd_own_up));
 
    sd_spi #(.CLK_HZ(CLK_HZ), .DIV_INIT(SD_DIV_INIT), .DIV_FAST(SD_DIV_FAST),
             .DIV_WRITE(SD_DIV_WRITE)) u_sd (
                                             .clk(clk_sys), .rst(rst),
                                             .rd(prov_rd | r_fire_rd | (rq_fire && !rq_wr) | sw_fire | ver_fire
-                                                | (fs_fire && !fs_req_wr)),
+                                                | (fs_fire && !fs_req_wr) | up_fire),
                                             .wr(prov_wr | r_fire_wr | (rq_fire && rq_wr) | (fs_fire && fs_req_wr)), .speed(sd_speed),
                                             .lba(prov_active ? prov_lba
                                                  : rq_fire  ? rq_lba
                                                  : (r_fire_rd || r_fire_wr) ? sd_lba
                                                  : fs_fire  ? fs_lba
+                                                 : up_fire  ? up_lba
                                                  : ver_fire ? ver_lba
                                                  : (sw_run && !sw_done) ? 32'd0 : sd_lba),
                                             .done(sd_done), .err(sd_err),
@@ -1195,7 +1226,7 @@ module top #(
    reg [7:0] ram_q;
    // Owner-gated: the persist's sector reads must not clobber the host's
    // block buffer, or the next host read could serve the residue.
-   wire      sd_fill = sd_buf_we && !sd_own_fs;
+   wire      sd_fill = sd_buf_we && !sd_own_fs && !sd_own_up;
    wire [9:0] wr_addr = sd_fill ? sd_buf_addr : ram_addr;
    wire [7:0] wr_data = sd_fill ? sd_buf_wdata : ram_wdata;
    wire       wr_en   = sd_fill | ram_we;
@@ -1341,8 +1372,16 @@ module top #(
                                       // the //e's power-to-first-command time
                                       // rather than estimating it.
                                       .fs_fatstart({4'd0, t_sdrdy, 4'd0, t_fsrdy}), .fs_nclus(fs_nclusters),
+                                      // Words 4 to 7 belong to the self-test's
+                                      // FAT scan when it is built in, and to
+                                      // the firmware updater otherwise:
+                                      // [25:24] phase, [19:16] error,
+                                      // [15:0] sectors done; sectors in all;
+                                      // the update file's BUILD_ID.
                                       .dbg_fat({part_lba, fat_start, data_start, bpb_fatsz,
-                                                free_count, first_free, target_lba, wcmp}),
+                                                SELFTEST_FAT ? {free_count, first_free, target_lba, wcmp}
+                                                : {6'd0, upd_phase, 4'd0, upd_err, upd_progress,
+                                                   upd_total, 16'd0, upd_build, 32'd0}}),
                                       .dbg_fst({wtest_ok, wtest_run, sd_fast, 2'd0, fstage}),
                                       .dbg_txn(dbg_txn),
                                       .rd_addr(rpt_addr), .rd_data(ram_q), .active(rpt_active),
@@ -1434,6 +1473,7 @@ module top #(
                                                                      .need_select(fs_need_select),
                                                                      .img_count(fs_img_count), .img_index(fs_img_index),
                                                                      .dbg_c1(fs_dbg_c1), .dbg_c2(fs_dbg_c2), .dbg_fat_start(fs_dbg_fat_start),
+                                                                     .root_cluster(fs_root_clus),
                                                                      .dbg_persist(fs_dbg_persist),
                                                                      .dbg_cfg(fs_dbg_cfg), .dbg_plen(fs_dbg_plen),
                                                                      .cat_raddr(sel_cat_addr), .cat_rdata(fs_cat_data),
@@ -1448,6 +1488,7 @@ module top #(
          assign fs_img_count = 8'd0;   assign fs_img_index = 8'd0;
          assign fs_cat_data = 8'h00; assign fs_wr_data = 8'h00;
          assign fs_req_wr = 1'b0;    assign fs_dbg_persist = 32'd0;
+         assign fs_root_clus = 32'd0;
          assign fs_need_select = 1'b0;
          assign fs_state = 5'd0;
       end
@@ -1687,6 +1728,61 @@ module top #(
    reg [25:0] hb = 0;
    always @(posedge clk_sys) if (rst) hb <= 0; else hb <= hb + 1'b1;
 
+   // ---- firmware update from the SD card (r2) -------------------------------
+   // It starts once the filesystem has read the card's geometry. An MBR,
+   // BPB or SD failure means there is no geometry to trust, and it never
+   // starts. The flash clock goes out through USRMCLK, since that pin is the
+   // configuration clock. PROGRAMN is pulled through R48 open drain: low or
+   // released, never driven high (a programmer or SW1 holding PROGRAMN low
+   // would otherwise sink current through R48), and held low long enough
+   // for C37 to discharge. Holding it until we go down covers that.
+   wire fs_geom_ok = fs_ready && fs_err != 4'd1 && fs_err != 4'd2 && fs_err != 4'd6;
+
+   generate if (UPDATE_ENABLE && FS_ENABLE && FAMILY == "ECP5") begin : g_update
+      wire up_sck, up_reboot;
+
+      fw_update #(.CLK_HZ(CLK_HZ), .BUILD_ID(BUILD_ID), .BOARD(UPDATE_BOARD),
+                  .NAME(UPDATE_NAME), .GOLDEN_ADDR(UPDATE_GOLDEN)) u_upd (
+                                                                          .clk(clk_sys), .rst(rst), .start(fs_geom_ok),
+                                                                          .root_clus(fs_root_clus), .fat_start(fs_dbg_fat_start),
+                                                                          .data_start(fs_data_start), .spc_log(fs_spc_log),
+                                                                          .req(up_req), .lba(up_lba), .fire(up_fire),
+                                                                          .sd_done(up_done), .sd_err(up_err),
+                                                                          .sd_buf_we(sd_buf_we && sd_own_up), .sd_buf_wdata(sd_buf_wdata),
+                                                                          .sd_buf_addr(sd_buf_addr),
+                                                                          .active(upd_active), .reboot(up_reboot), .err(upd_err),
+                                                                          .progress(upd_progress), .total(upd_total), .phase(upd_phase),
+                                                                          .file_build(upd_build), .dbg_state(),
+                                                                          .flash_csn(flash_csn), .flash_sck(up_sck),
+                                                                          .flash_mosi(flash_mosi), .flash_miso(flash_miso));
+
+      USRMCLK u_mclk (.USRMCLKI(up_sck), .USRMCLKTS(1'b0));
+
+      TRELLIS_IO #(.DIR("BIDIR")) u_reboot (.B(fpga_reboot), .I(1'b0), .T(~up_reboot), .O());
+   end else begin : g_no_update
+      assign up_req = 1'b0;        assign up_lba = 32'd0;
+      assign upd_active = 1'b0;    assign upd_err = 4'd0;
+      assign upd_progress = 16'd0; assign upd_total = 16'd0;
+      assign upd_phase = 2'd0;     assign upd_build = 32'd0;
+      assign flash_csn = 1'b1;     assign flash_mosi = 1'b0;
+   end endgenerate
+
+   // While an update runs, the LEDs fill from D1 to D8 as it goes: blinking
+   // during the first pass (reading and checking the file), solid during the
+   // second (writing the flash). All eight light just before the reboot. A
+   // failure blinks D8 with the error code on D1 to D4, until a host
+   // appears.
+   wire [7:0] upd_bar;
+   genvar     bi;
+   for (bi = 0; bi < 8; bi = bi + 1) begin : g_bar
+      assign upd_bar[bi] = ({upd_progress, 3'b000} >= upd_total * (bi + 1));
+   end
+   wire       upd_show = upd_active || (upd_err != 4'd0 && !host_seen);
+   wire [7:0] led_upd  = (upd_err != 4'd0)  ? {hb[23], 3'b000, upd_err}
+              : (upd_phase == 2'd3) ? 8'hFF
+              : (upd_phase == 2'd1) ? (hb[22] ? upd_bar : 8'h00)
+              : upd_bar;
+
    wire [7:0] led_bus = {aux7_s[1],   // 7  DB-25 7,  SmartPort /ENABLE1
                          ph0_s[1],    // 6  DB-25 1,  SmartPort WRDATA
                          wp_s[1],     // 5  SD write protect, as wired
@@ -1710,6 +1806,7 @@ module top #(
    wire [7:0] led_walk = (8'd1 << pw_ph) | ((pw_ph >= 3'd5) ? 8'h80 : 8'h00);
 
    assign led = diag_en   ? led_walk
+                : upd_show  ? led_upd
                 : host_seen ? led_bus
                 : led_sd;
 

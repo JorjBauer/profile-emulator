@@ -157,12 +157,25 @@ footprints. Use the reduced stencil.
 `fpga/hw-r2/BRINGUP-r2.md` walks through the rest: paste and reflow,
 inspection, checking the power rails, first power, and programming.
 
-### Reflashing an r2 board over JTAG
+### Updating an r2 board
 
-In `fpga/`, `make r2` builds it, and `make r2-flash` writes it to the board's
-flash (`make r2-prog` loads SRAM instead). The programmer is an FT4232H module
-on J4, through a pogo-pin clip or a header soldered there. The wiring is in `fpga/README.md` under "Building for the r2 board".
-Power the board from USB-C, not from J4.
+The flash holds two copies of the gateware: the one that runs, and a golden
+copy the board falls back to if the first is ever damaged. A new board gets
+both over JTAG, once. After that, an update can come from the SD card.
+
+In `fpga/`, `make r2-flash-dual` builds the gateware and writes both copies,
+plus the record that points the FPGA at the golden one. The programmer is an
+FT4232H module on J4, through a pogo-pin clip or a header soldered there. The
+wiring is in `fpga/README.md` under "Building for the r2 board". Power the
+board from USB-C, not from J4. (`make r2-prog` loads SRAM instead, for
+testing.)
+
+For an update from the SD card, `make r2-update` builds `R2UPDATE.BIN`. Copy
+it to the root of the card and power the board up. If the file is newer than
+what's running, the LEDs fill up twice (once checking the file, once writing
+it) and the board reboots into it. The file can stay on the card; it's
+skipped once it's the version that's running. `fpga/README.md` has the
+details under "Updating from the SD card".
 
 There are no prebuilt bitstreams yet, so you need the same tools as the ULX3S
 build.
@@ -175,9 +188,9 @@ not a schematic.
 
 ## What doesn't work yet
 
-- The drive can't update its own firmware from the SD card. The r2 hardware
-  can do it (the FPGA can drive its flash pins and pull its own PROGRAMN), but
-  the gateware doesn't exist yet. For now it's JTAG.
+- The SD card update passes its simulations, but I haven't tried it on a
+  board yet. Neither the fallback to the golden copy nor the reboot at the
+  end has been seen working on real hardware. JTAG works.
 - No prebuilt bitstreams.
 - The ULX3S interface board's design isn't published.
 - Nobody has tried it on an Apple ///.

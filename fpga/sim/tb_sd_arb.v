@@ -19,7 +19,9 @@ module tb_sd_arb;
                .r_fire_rd(r_fire_rd), .r_fire_wr(r_fire_wr),
                .r_done(r_done), .r_err(r_err),
                .f_req(f_req), .f_req_wr(f_req_wr), .f_fire(f_fire),
-               .f_done(f_done), .f_err(f_err), .own_fs(own_fs));
+               .f_done(f_done), .f_err(f_err),
+               .u_req(1'b0), .u_fire(), .u_done(), .u_err(),
+               .own_fs(own_fs), .own_up());
 
    integer fails = 0;
    task check(input cond, input [255:0] what);

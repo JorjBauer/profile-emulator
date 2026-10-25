@@ -84,17 +84,22 @@ which wraps `top` and leaves every other build alone:
   If it isn't driven low, the FPGA never sees /PCMD or /PSTRB.
 - **XCVR_OE_N** (pin 74) is held off until the host asserts /PCMD the first
   time, because PD0 to PD7 have no pulls and float with no cable.
-- **FPGA_REBOOT** (pin 67) goes to PROGRAMN through R48. Nothing uses it yet,
-  so it's an input we never read. Don't make it an output assigned `1'bz`:
-  nextpnr turns that into a driven pin, and low there reboots the part over
-  and over.
+- **FPGA_REBOOT** (pin 67) goes to PROGRAMN through R48. The SD update pulls
+  it low through an explicit open-drain pad when it's done, and otherwise it's
+  released. Don't make it an output assigned `1'bz`: nextpnr turns that into a
+  driven pin, and low there reboots the part over and over. It must never be
+  driven high either.
+- **The flash** (pins 46, 47 and 49, and the configuration clock through
+  `USRMCLK`) is ours once the part is configured. The SD update uses it.
 
 It builds next to the ULX3S flavor under its own name:
 
     make r2             both bitstreams
     make r2-prog        load SRAM over JTAG, volatile
     make r2-reload      the same with no rebuild
-    make r2-flash       write the SPI flash over JTAG, through the FPGA
+    make r2-flash-dual  write both flash images and the jump record over JTAG
+    make r2-flash       rewrite just the primary image over JTAG
+    make r2-update      build R2UPDATE.BIN, for an update from the SD card
 
 JTAG is an FT4232H module on J4, channel A, under the module's UART
 labels: TXD to TCK (J4 pin 4), RXD to TDI (pin 3), RTS to TDO (pin 2),
@@ -130,6 +135,103 @@ With both changes, build 10231827 (60.17 MHz against the 50 MHz target)
 serves the //e from a cold start. I couldn't measure how much margin is
 left. The //e's monitor takes longer to come up than the drive does, so
 there's nothing to time on the screen.
+
+## Updating from the SD card
+
+r2 can rewrite its own flash from a file on the SD card and reboot into it.
+`src/fw_update.v` does the work, through `src/spi_flash.v`. It's only built
+into r2 (`UPDATE_ENABLE`), since the ULX3S has no line from the FPGA to
+PROGRAMN.
+
+### The flash layout
+
+    0x000000   the primary image: 256 bytes of $FF, then the bitstream
+    0x100000   the golden image, laid out the same way
+    0xFFFF00   a jump record pointing at the golden image
+
+The updater only ever writes below 0x100000. If the primary fails to
+configure, because an update lost power partway through for instance, the
+ECP5 follows the jump record to the golden copy at power-up (Lattice
+FPGA-TN-02203). The golden copy carries the updater too, so it finds the file
+again and finishes the job. `make r2-flash-dual` writes all three pieces over
+JTAG, which a board needs once.
+
+The layout is ecpmulti's, but we don't use ecpmulti. It re-serializes every
+bitstream and drops `--compress`, `--freq` and `--spimode`, and r2 needs all
+three to win the power-on race. `ecppack --bootaddr` sets multiboot instead,
+and `tools/mkupdate.js` writes the jump record. Both images point their next
+boot at 0. ecpmulti points the primary at the golden copy instead, and then
+the reboot after an update would land on the golden copy, which would write
+the same file again and reboot again, forever.
+
+### The file
+
+`make r2-update` builds `R2UPDATE.BIN`: a 512-byte header, then the primary
+image padded to whole sectors. The header holds `PEFW`, the board (`R2`), the
+payload's length, its CRC-32 and its `BUILD_ID`. Put it in the root of the
+card.
+
+### What happens at power-up
+
+Once the filesystem is up, the updater looks for `R2UPDATE.BIN` in the root.
+It stops there, and the drive carries on as normal, if:
+
+- there's no file
+- the file's `BUILD_ID` is the one that's running, which is what keeps an
+  update from repeating, so the file can stay on the card
+
+Otherwise it takes the drive (the //e sees no drive while this runs) and
+makes two passes. The first reads the whole file and checks its CRC, and
+writes nothing. The second erases each 64 KB block as it reaches it,
+programs each sector, and reads it back. Then it pulls PROGRAMN, and the
+board comes up running the new image. An update of the current 371 KB image
+reads the card twice and writes about 6 blocks, which takes a few seconds.
+
+The LEDs show it. During the first pass they fill from D1 to D8, blinking.
+During the second they fill again, solid. All eight light just before the
+reboot. A failure blinks D8 and shows the error code on D1 to D4 (D1 is bit
+0), until a host appears:
+
+| code | meaning |
+|-----:|---------|
+| 1 | an SD read failed |
+| 2 | the header isn't `PEFW`, or its length is bad |
+| 3 | the file is for another board |
+| 4 | the payload doesn't match its CRC |
+| 5 | the file ends before its payload does |
+| 6 | the flash didn't answer as a W25Q128 |
+| 7 | an erase timed out |
+| 8 | a page program timed out |
+| 9 | a sector read back differently |
+
+Errors 2 to 6 happen before anything is written, and so can error 1, and
+then the drive goes back to serving. Errors 7 to 9, and an error 1 during
+the second pass, leave the primary half written. The running image is
+fine until power is removed, and at the next power-up the board falls back
+to the golden copy, which tries again.
+
+The serial report carries the same status in the `FAT` line, words 4 to 6,
+when the self-test's FAT scan isn't built in: `[25:24]` the pass (1 check, 2
+write, 3 done), `[19:16]` the error, `[15:0]` the sectors done; then the
+sectors in all; then the file's `BUILD_ID`.
+
+`make sim-fw-update` runs it against a hand-built FAT32 card and a model
+flash. A good file is written and read back, with its directory entry and
+its clusters both scattered so the FAT has to be followed. A file that's
+already running, corrupted, built for another board, missing, or that reads
+back wrong is refused. Nothing at or above the golden image is ever written.
+
+**None of this has run on a board yet.** The simulation covers the updater's
+own logic. It can't show that the ECP5 really falls back to the golden copy,
+that `USRMCLK` drives the flash clock as expected, or that the reboot works.
+Before trusting it, flash a board with `make r2-flash-dual`, then try an
+update. Then erase the first block of the flash over JTAG and power-cycle the
+board, to check it comes up from the golden copy.
+
+One case can still loop. If a file passes every check but its image won't
+configure, the board falls back to the golden copy, which writes the same
+file again, and reboots into it. Each round takes a few seconds, and the
+LEDs show it happening. Taking the card out stops it.
 
 ## Electrical: the bus is 5V, the FPGA is not
 

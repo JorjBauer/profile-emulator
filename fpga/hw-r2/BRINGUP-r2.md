@@ -212,15 +212,19 @@ It should report IDCODE `0x21111043`, the LFE5U-12F. If it doesn't:
 
 Then, in `fpga/`:
 
-    make r2-prog     build and load it into SRAM, volatile
-    make r2-flash    write it to the SPI flash
+    make r2-prog        build and load it into SRAM, volatile
+    make r2-flash-dual  write it to the SPI flash, twice
 
 `make r2-prog` first lets you check the board before the flash is written.
+`make r2-flash-dual` writes the gateware twice: the copy that runs, and a
+golden copy the board falls back to if the first is ever damaged, plus the
+record that points the FPGA at the golden one. After that, updates can come
+from the SD card (the top-level README covers it).
 Building needs the tools in the top-level README. `fpga/README.md` has the
 details under "Building for the r2 board".
 
-`make r2-flash` should find the flash as a Winbond W25Q128 (JEDEC ID
-`0xef4018`), and the FPGA reloads from it when the write finishes. If you
+`make r2-flash-dual` should find the flash as a Winbond W25Q128 (JEDEC ID
+`0xef4018`), and the FPGA reloads from it when the last write finishes. If you
 fitted the LEDs:
 
 - **No SD card:** D6 blinks at about 1.5 Hz. That's the heartbeat, and it

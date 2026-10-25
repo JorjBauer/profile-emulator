@@ -61,7 +61,8 @@ blobs: $(BLOBS)
 SRC     := src/top.v src/profile_bus.v src/profile_target.v src/sd_spi.v \
            src/block_router.v src/spare_table.v src/geometry.v src/verifier.v \
            src/bus_exercise.v src/block_stream.v src/fat32.v src/selector.v \
-           src/uart_tx.v src/uart_rx.v src/reporter.v src/bus_capture.v src/sd_arb.v src/usb_prov.v
+           src/uart_tx.v src/uart_rx.v src/reporter.v src/bus_capture.v src/sd_arb.v src/usb_prov.v \
+           src/spi_flash.v src/fw_update.v
 
 # The parameters every ULX3S build carries.
 #
@@ -106,6 +107,11 @@ all: $(PROJ).bit
 # tested default; a board can raise it with a target-specific value (r2 does).
 FLASHFREQ ?= 38.8
 #
+# BOOTADDR is for a board with a golden image in its flash (r2): it adds
+# ecppack's --bootaddr, which turns on the ECP5's multiboot and sets where a
+# PROGRAMN reboot loads from. Empty everywhere else.
+BOOTADDR ?=
+#
 # --compress + --freq 38.8 + fast-read are the INSTANT-ON flags for the FLASHED
 # copy. At ecppack's 2.4 MHz default MCLK, an uncompressed 5.4 Mbit stream takes
 # ~2.25 s to load from flash. That alone loses the power-on race against the
@@ -117,6 +123,7 @@ define ECP5_BUILD
 
 $(1).json: $$(SRC) $(5) $$(BLOBS)
 	@date -u +%m%d%H%M > .build_id
+	@cp .build_id $(1).buildid
 	@echo "BUILD_ID $$$$(cat .build_id) ($(1))"
 	BID=$$$$((16#$$$$(cat .build_id))); \
 	yosys -p "read_verilog $$(SRC) $(5); \
@@ -129,12 +136,12 @@ $(1).config: $(1).json $(if $(3),$(3),$$(LPF))
 	  --lpf $(if $(3),$(3),$$(LPF)) --textcfg $$@ --freq 50
 
 $(1).bit: $(1).config
-	ecppack --idcode 0x21111043 --compress --freq $$(FLASHFREQ) --spimode fast-read $$< $$@
+	ecppack --idcode 0x21111043 --compress --freq $$(FLASHFREQ) --spimode fast-read $$(BOOTADDR) $$< $$@
 
 $(1)_nextflash.bit: $(1).config
 	ecppack --idcode 0x21111043 --freq 38.8 $$< $$@
 
-CLEANFILES += $(1).json $(1).config $(1).bit $(1)_nextflash.bit
+CLEANFILES += $(1).json $(1).config $(1).bit $(1)_nextflash.bit $(1).buildid
 
 
 endef
@@ -358,6 +365,15 @@ sim-fat32-flat: sim/tb_fat32.v sim/sd_model.v src/fat32.v src/sd_spi.v
 # The boot menu's magic blocks: the info block, the body pages, the synthetic
 # block 0 and SELECT. The 6502 side is not simulated; this checks that the drive
 # answers what that side asks for.
+# The SD firmware updater against a hand-built FAT32 card and a model flash:
+# a good file is written and read back, and a file that's already running,
+# corrupted, meant for another board, missing, or that reads back wrong is
+# refused, and nothing at or above the golden image is ever written.
+sim-fw-update: sim/tb_fw_update.v src/fw_update.v src/spi_flash.v
+	iverilog -g2012 -o $(SIMBIN)_fwu -s tb_fw_update \
+	  sim/tb_fw_update.v src/fw_update.v src/spi_flash.v
+	vvp $(SIMBIN)_fwu | $(SIMCHECK)
+
 sim-selector: sim/tb_selector.v src/selector.v $(BLOBS)
 	iverilog -g2012 -o $(SIMBIN)_sel -s tb_selector sim/tb_selector.v src/selector.v
 	vvp $(SIMBIN)_sel | $(SIMCHECK)
@@ -398,7 +414,7 @@ sim-v1skew: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	vvp $(SIMBIN)_v1s | $(SIMCHECK)
 
-sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew
+sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-fw-update
 
 # ---- the r2 board (hw-r2/) -------------------------------------------------
 # The same design again, wrapped in src/top_r2.v for the three pins r2 added
@@ -429,8 +445,39 @@ R2CABLE  ?= ft4232
 # read also stays at this initialization rate.
 # Reads after it stay at 8.33 MHz, the last rate measured to return correct
 # data. Re-measure with SWEEP_ENABLE before raising that.
-R2PARAMS := -set SD_DIV_INIT 62
+#
+# UPDATE_ENABLE builds in the SD firmware update (src/fw_update.v).
+R2PARAMS := -set SD_DIV_INIT 62 -set UPDATE_ENABLE 1
 $(R2PROJ).bit: FLASHFREQ := 62.0
+
+# ---- the r2 flash: two images and a jump record ------------------------------
+# The primary at 0 is what an SD update rewrites. The golden copy at
+# R2GOLDEN is written once, over JTAG, and never touched by the updater; if
+# the primary ever fails to configure, the ECP5 follows the jump record in
+# the last 256 bytes to the golden copy instead. Both slots hold the same
+# bitstream. See src/fw_update.v.
+#
+# Both images point their next boot at 0, the primary, unlike ecpmulti's
+# layout, where the primary points at the golden copy. The updater reboots
+# with PROGRAMN once it has written the primary, and that reboot has to land
+# on the new primary. If it landed on the golden copy, the golden copy would
+# see a file that isn't its own build, write it again, and reboot again,
+# forever.
+#
+#   make r2-flash-dual   write all three over JTAG: do this once per board
+#   make r2-update       build R2UPDATE.BIN for the root of the SD card
+R2GOLDEN := 0x100000
+$(R2PROJ).bit: BOOTADDR := --bootaddr 0
+
+$(R2PROJ)_slot.bin: $(R2PROJ).bit tools/mkupdate.js
+	node tools/mkupdate.js region $< $@
+$(R2PROJ)_jump.bin: tools/mkupdate.js
+	node tools/mkupdate.js jump $(R2GOLDEN) $@
+
+R2UPDATE.BIN: $(R2PROJ).bit tools/mkupdate.js
+	node tools/mkupdate.js update $< $$(cat $(R2PROJ).buildid) R2 $@
+
+CLEANFILES += $(R2PROJ)_slot.bin $(R2PROJ)_jump.bin R2UPDATE.BIN
 
 ifneq ($(PROJ),$(R2PROJ))
 $(eval $(call ECP5_BUILD,$(R2PROJ),$(R2PARAMS),$(R2LPF),$(R2PKG),src/top_r2.v,top_r2))
@@ -446,6 +493,13 @@ r2-reload:
 
 r2-flash: $(R2PROJ).bit
 	openFPGALoader -c $(R2CABLE) -f $<
+
+r2-flash-dual: $(R2PROJ)_slot.bin $(R2PROJ)_jump.bin
+	openFPGALoader -c $(R2CABLE) -f -o $(R2GOLDEN) $(R2PROJ)_slot.bin
+	openFPGALoader -c $(R2CABLE) -f -o 0xFFFF00 $(R2PROJ)_jump.bin
+	openFPGALoader -c $(R2CABLE) -f -o 0 $(R2PROJ)_slot.bin
+
+r2-update: R2UPDATE.BIN
 
 # ---- whole-volume verification bitstream ------------------------------------
 # A SEPARATE bitstream, because the verifier holds the SD engine for the whole
@@ -518,9 +572,9 @@ clean:
 	rm -f $(CLEANFILES) $(BLOBS) .build_id
 
 .PHONY: all blobs prog reload flash stat ecp5 ecp5-prog ecp5-reload ecp5-flash ecp5-stat \
-        r2 r2-prog r2-reload r2-flash \
+        r2 r2-prog r2-reload r2-flash r2-flash-dual r2-update \
         sim sim-iie sim-iie-late sim-iie-fast sim-iie-32mb sim-sd sim-geom sim-verify \
         sim-verify-stride sim-retry sim-retry-exhaust sim-usb-prov sim-router-race \
         sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-fat32-lru \
-        sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-all \
+        sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-fw-update sim-all \
         verify-bit verify-prog dump-prog exercise-prog stream-prog clean

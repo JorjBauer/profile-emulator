@@ -1,4 +1,4 @@
-// sd_arb: ownership arbitration between the two SD masters that can overlap.
+// sd_arb: ownership arbitration between the SD masters that can overlap.
 //
 // The block_router (host I/O) and fat32 (the deferred persist) both
 // drive the single SD engine, and the persist runs during live OS
@@ -16,6 +16,9 @@
 //     fat32 only fires when the router has nothing pending. fat32's
 //     multi-op sequences tolerate interleaving by design (each req is
 //     self-contained).
+//   - The firmware updater is last: it only fires when neither the
+//     router nor fat32 wants the engine. It looks for its file while a
+//     host may already be talking, so it must never delay a host read.
 //   - sd_done and sd_err are routed to the OWNER of the in-flight op
 //     only.
 //   - The owner flag keys the write-data source and buffer-write
@@ -52,9 +55,16 @@ module sd_arb (
                output wire f_done,
                output wire f_err,
 
+               // updater face (req/fire handshake, reads only)
+               input wire  u_req,
+               output wire u_fire,
+               output wire u_done,
+               output wire u_err,
+
                // who owns the op in flight (keys data-source and
                // buffer gating in top)
-               output reg  own_fs
+               output reg  own_fs,
+               output reg  own_up
                );
 
    reg rd_p, wr_p;
@@ -63,10 +73,11 @@ module sd_arb (
    assign r_fire_rd = r_fire && (rd_p | r_rd);
    assign r_fire_wr = r_fire && (wr_p | r_wr);
    assign f_fire    = f_req && engine_ready && !r_pend;
+   assign u_fire    = u_req && engine_ready && !r_pend && !f_req;
 
    always @(posedge clk) begin
       if (rst) begin
-         rd_p <= 1'b0; wr_p <= 1'b0; own_fs <= 1'b0;
+         rd_p <= 1'b0; wr_p <= 1'b0; own_fs <= 1'b0; own_up <= 1'b0;
       end else begin
          if (r_fire) begin
             rd_p <= 1'b0; wr_p <= 1'b0;
@@ -74,15 +85,18 @@ module sd_arb (
             if (r_rd) rd_p <= 1'b1;
             if (r_wr) wr_p <= 1'b1;
          end
-         if (r_fire)      own_fs <= 1'b0;
-         else if (f_fire) own_fs <= 1'b1;
+         if (r_fire)      begin own_fs <= 1'b0; own_up <= 1'b0; end
+         else if (f_fire) begin own_fs <= 1'b1; own_up <= 1'b0; end
+         else if (u_fire) begin own_fs <= 1'b0; own_up <= 1'b1; end
       end
    end
 
-   assign r_done = sd_done && !own_fs;
-   assign r_err  = sd_err  && !own_fs;
+   assign r_done = sd_done && !own_fs && !own_up;
+   assign r_err  = sd_err  && !own_fs && !own_up;
    assign f_done = sd_done &&  own_fs;
    assign f_err  = sd_err  &&  own_fs;
+   assign u_done = sd_done &&  own_up;
+   assign u_err  = sd_err  &&  own_up;
 
 endmodule
 

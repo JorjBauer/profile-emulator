@@ -154,9 +154,24 @@ IOBUF  PORT "sd_wp_n"  PULLMODE=UP IO_TYPE=LVCMOS33;
 LOCATE COMP "usb_tx_alt" SITE "C17";  # GN23  J2.67  spare
 IOBUF  PORT "usb_tx_alt" IO_TYPE=LVCMOS33 DRIVE=4;
 
+# The configuration flash's data pins, as ULX3S wires them. Only r2 builds the
+# SD firmware update in; here /CS just sits high and MOSI low, so the flash
+# stays deselected.
+LOCATE COMP "flash_csn"  SITE "R2";
+IOBUF  PORT "flash_csn"  IO_TYPE=LVCMOS33;
+LOCATE COMP "flash_mosi" SITE "W2";
+IOBUF  PORT "flash_mosi" IO_TYPE=LVCMOS33;
+LOCATE COMP "flash_miso" SITE "V2";
+IOBUF  PORT "flash_miso" IO_TYPE=LVCMOS33;
+
+# fpga_reboot is r2's line to PROGRAMN. The ULX3S build never drives it, so
+# it's an input here, parked on spare GN24.
+LOCATE COMP "fpga_reboot" SITE "D16";  # GN24  J2.69  spare
+IOBUF  PORT "fpga_reboot" PULLMODE=NONE IO_TYPE=LVCMOS33;
+
 # --- spare GN pins ----------------------------------------------------------
 #   GN23  C17   J2.67   <- taken by usb_tx_alt above (idle-high, never toggles)
-#   GN24  D16   J2.69
+#   GN24  D16   J2.69   <- taken by fpga_reboot above (never driven)
 #   GN25  E14   J2.71
 #
 # NOT constrained here: leaving them out means nextpnr will refuse a design

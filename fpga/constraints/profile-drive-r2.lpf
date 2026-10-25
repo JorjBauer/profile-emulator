@@ -98,7 +98,18 @@ IOBUF  PORT "usb_rx"     PULLMODE=UP IO_TYPE=LVCMOS33;
 # U3's /OE: R53 holds it high until we are configured, then we drive it low.
 LOCATE COMP "u3_oe_n"     SITE "76";
 IOBUF  PORT "u3_oe_n"     IO_TYPE=LVCMOS33;
-# To PROGRAMN through R48. Low reboots the part; it must never go high.
-# An input with no pull, so it cannot drive either way (see top_r2.v).
+# To PROGRAMN through R48. Low reboots the part; it must never go high. The
+# SD firmware update pulls it low through an explicit pad, open drain, after
+# it has written the flash; otherwise it's released (see src/top.v).
 LOCATE COMP "fpga_reboot" SITE "67";
 IOBUF  PORT "fpga_reboot" PULLMODE=NONE IO_TYPE=LVCMOS33;
+
+# The configuration flash (U4) once we're running, for the SD update. Its
+# clock is the configuration clock, reached through USRMCLK, so it has no
+# entry here. /WP and /HOLD have their own pull-ups on the board.
+LOCATE COMP "flash_csn"  SITE "49";
+IOBUF  PORT "flash_csn"  IO_TYPE=LVCMOS33;
+LOCATE COMP "flash_mosi" SITE "47";
+IOBUF  PORT "flash_mosi" IO_TYPE=LVCMOS33;
+LOCATE COMP "flash_miso" SITE "46";
+IOBUF  PORT "flash_miso" IO_TYPE=LVCMOS33;

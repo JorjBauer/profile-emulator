@@ -105,6 +105,9 @@ module fat32 #(
                   // done, [15] dirent write done, [23:16] index.
                   output reg  [31:0] dbg_persist,
                   output wire [31:0] dbg_fat_start,
+                  // The root directory's first cluster, for the firmware
+                  // updater, which looks for its file there.
+                  output wire [31:0] root_cluster,
 
                   // Catalog read port, for the menu. Records are 64
                   // bytes; see the layout in SELECTOR.md.
@@ -163,6 +166,7 @@ module fat32 #(
    end
    reg [31:0] part_lba, fat_start, rsvd, fatsz, root_clus;
    assign dbg_fat_start = fat_start;
+   assign root_cluster  = root_clus;
    reg [7:0]  nfat, spc;
    reg [15:0] bps;
    reg [7:0]  fat_left;      // FATs still to add when computing data_start
