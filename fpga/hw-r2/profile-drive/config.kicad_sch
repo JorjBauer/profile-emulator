@@ -575,7 +575,7 @@
   (rectangle (start 15.24 50.8) (end 127 127) (stroke (width 0.2) (type dash)) (fill (type none)) (uuid "3c209390-1131-55e9-8047-8a1be7081ca3"))
   (text "JTAG" (exclude_from_sim no) (at 16.51 47.5 0) (effects (font (size 2 2) bold) (justify left top)) (uuid "8dcaf13a-b634-51e0-ae89-910892175220"))
   (symbol (lib_id "device:Header_JTAG") (at 99.06 88.9 0) (unit 1)
-    (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)
+    (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp yes)
     (uuid "2b08fcba-b39d-57c8-8a17-8dc78a8ade20")
     (property "Reference" "J4" (at 93.98 74.3 0) (effects (font (size 1.27 1.27)) (justify left)))
     (property "Value" "JTAG 1x6" (at 93.98 76.84 0) (effects (font (size 1.27 1.27)) (justify left)))

@@ -103,22 +103,24 @@ If you want JLCPCB to assemble it, upload these two as well:
 
 - `profile-drive-r2-bom-jlcpcb.csv`: the BOM, with the manufacturer part and
   the LCSC number for each line. Every LCSC number is the exact part in the
-  schematic, except for the parts the schematic doesn't name: red LEDs
-  (KENTO KT-0603R) and a gold 1x6 header for J4.
+  schematic, except for the LEDs, which the schematic doesn't name. The BOM
+  uses red ones (KENTO KT-0603R).
 - `profile-drive-r2-cpl-jlcpcb.csv`: the pick-and-place file, in the same
   coordinates as the Gerbers. I haven't had JLCPCB assemble one, so check
   every part's rotation in their preview before you pay. The TQFP, the
   SOT-23s, the TSSOPs and the connectors are the usual suspects.
 
-J5, J6, J7 and SW1 are optional and left out of both files. They're for
-debugging and service, and you can solder them on later.
+J4, J5, J6, J7 and SW1 are optional and left out of both files. They're for
+programming, debugging and service, and you can solder them on later. A new
+board's flash is blank, though, so something has to reach J4's pads once to
+load it. I use a pogo-pin clip on J4. A 1x6 header soldered there works too.
 
 As of 2026-10-24, three parts had no stock at JLCPCB: U1 (the FPGA), J1 (the
 USB-C socket) and J2 (the DB-25). You'll probably have to send those in
 yourself or solder them by hand. R31 (84.5k) had only 17 in stock.
 
 The LCSC numbers are also in the schematic, as an `LCSC` field on each part,
-and J5, J6, J7 and SW1 are marked DNP in both the schematic and the board. If
+and J4, J5, J6, J7 and SW1 are marked DNP in both the schematic and the board. If
 you change the design, KiCad's own BOM and position exports pick both up, but
 the two CSV files here won't follow on their own.
 
@@ -128,6 +130,9 @@ The schematic gives each of the eight LEDs a 1k resistor (R35 to R42, in
 order for D1 to D8) and doesn't name a color. That's sized for ordinary red or
 yellow 0603 LEDs. The BOM uses red (KENTO KT-0603R, LCSC C2286). For yellow,
 NationStar NCD0603Y2 (LCSC C89811) works the same way.
+
+The LEDs and their resistors are optional. Nothing else is on those nets, so
+leaving them off only loses the status display and the error codes.
 
 If you use white, blue or true green LEDs, change their resistors to 330R.
 Those colors need about 3 V to light, which leaves only a few tenths of a volt
@@ -148,7 +153,7 @@ I haven't published a bring-up checklist yet.
 
 In `fpga/`, `make r2` builds it, and `make r2-flash` writes it to the board's
 flash (`make r2-prog` loads SRAM instead). The programmer is an FT4232H module
-on J4. The wiring is in `fpga/README.md` under "Building for the r2 board".
+on J4, through a pogo-pin clip or a header soldered there. The wiring is in `fpga/README.md` under "Building for the r2 board".
 Power the board from USB-C, not from J4.
 
 There are no prebuilt bitstreams yet, so you need the same tools as the ULX3S
