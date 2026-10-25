@@ -122,6 +122,16 @@ FLASHFREQ ?= 38.8
 # PROGRAMN reboot loads from. Empty everywhere else.
 BOOTADDR ?=
 #
+# BUILD_ID is the minutes since 2026-01-01 00:00 UTC when synthesis started,
+# with the top bit set, as eight hex digits. It only ever goes up, which is
+# what lets r2's updater install only a newer file (see src/fw_update.v).
+# The top bit puts every one above the month-day-hour-minute stamps builds
+# used before (at most $12312359), so an old update file left on a card
+# reads as older and is ignored. 31 bits of minutes last about 4,000 years.
+# To turn one back into a date:
+#
+#   date -u -r $$(( (0x<BUILD_ID> & 0x7FFFFFFF) * 60 + 1767225600 ))
+#
 # Every bitstream's header carries a comment, "PEV:<BUILD_ID>:<VERSION>", added
 # to the .config ahead of nextpnr's own. It's the first thing after the
 # header's $FF $00, so r2's updater can read any flash slot's version from a
@@ -137,9 +147,9 @@ BOOTADDR ?=
 define ECP5_BUILD
 
 $(1).json: $$(SRC) $(5) $$(BLOBS) VERSION
-	@date -u +%m%d%H%M > .build_id
+	@printf '%08X\n' $$$$(( 0x80000000 | (($$$$(date -u +%s) - 1767225600) / 60) )) > .build_id
 	@cp .build_id $(1).buildid
-	@echo "BUILD_ID $$$$(cat .build_id) ($(1))"
+	@echo "BUILD_ID $$$$(cat .build_id) ($(1), $$$$(date -u '+%Y-%m-%d %H:%M') UTC)"
 	BID=$$$$((16#$$$$(cat .build_id))); \
 	yosys -p "read_verilog $$(SRC) $(5); \
 	  chparam $$(ECP5_PARAMS) $(2) -set BUILD_ID $$$$BID top; \
@@ -506,6 +516,14 @@ endif
 
 r2: $(R2PROJ).bit $(R2PROJ)_nextflash.bit
 
+# The r2 build plus the JTAG debug register (JTAG_DEBUG in src/top.v), for
+# SRAM only: `make r2-debug-prog`, then read it with ER1 (IR 0x32).
+R2DPROJ := profile_emu_r2dbg
+$(eval $(call ECP5_BUILD,$(R2DPROJ),$(R2PARAMS) -set JTAG_DEBUG 1,$(R2LPF),$(R2PKG),src/top_r2.v,top_r2))
+
+r2-debug-prog: $(R2DPROJ)_nextflash.bit
+	openFPGALoader -c $(R2CABLE) $<
+
 r2-prog: $(R2PROJ)_nextflash.bit
 	openFPGALoader -c $(R2CABLE) $<
 
@@ -593,7 +611,7 @@ clean:
 	rm -f $(CLEANFILES) $(BLOBS) .build_id
 
 .PHONY: all blobs prog reload flash stat ecp5 ecp5-prog ecp5-reload ecp5-flash ecp5-stat \
-        r2 r2-prog r2-reload r2-flash r2-flash-dual r2-update \
+        r2 r2-prog r2-reload r2-flash r2-flash-dual r2-update r2-debug-prog \
         sim sim-iie sim-iie-late sim-iie-fast sim-iie-32mb sim-sd sim-geom sim-verify \
         sim-verify-stride sim-retry sim-retry-exhaust sim-usb-prov sim-router-race \
         sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-fat32-lru \

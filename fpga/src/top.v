@@ -109,10 +109,11 @@ module top #(
              parameter         FS_AUTOPICK = 1'b0,
              // See RECURSE in src/fat32.v. Off scans FS_DIR only.
              parameter         FS_RECURSE  = 1'b1,
-             // UTC MMDDHHMM build stamp, injected by the build flow (chparam
-             // for yosys). Reported on the SD line,
-             // word 2, so the running firmware identifies itself. 0 = a build
-             // that bypassed the flow.
+             // Minutes since 2026-01-01 00:00 UTC at synthesis, top bit set,
+             // injected by the build flow (chparam for yosys). It only goes
+             // up, so the updater can tell newer from older. Reported on the
+             // SD line, word 2, so the running firmware identifies itself.
+             // 0 = a build that bypassed the flow.
              parameter [31:0]  BUILD_ID = 32'h0,
              // The release version, up to seven characters, from the VERSION
              // file (chparam again). The select menu shows it.
@@ -197,7 +198,11 @@ module top #(
              parameter         UPDATE_ENABLE = 1'b0,
              parameter [87:0]  UPDATE_NAME   = "R2UPDATEBIN",
              parameter [31:0]  UPDATE_BOARD  = "R2  ",
-             parameter [23:0]  UPDATE_GOLDEN = 24'h100000
+             parameter [23:0]  UPDATE_GOLDEN = 24'h100000,
+             // A read-only debug register on the ECP5's ER1 JTAG
+             // instruction, for chasing the updater on a board with no
+             // serial adapter. Off in every normal build.
+             parameter         JTAG_DEBUG    = 1'b0
              ) (
                 input  wire        clk,
                 input  wire        rst_n,
@@ -522,6 +527,8 @@ module top #(
    wire [31:0]      upd_build;
    wire [55:0]      upd_pri_ver, upd_gld_ver;
    wire [7:0]       upd_run_slot;
+   wire [4:0]       upd_state;
+   wire [127:0]     upd_dbg;
    wire [31:0]      fs_root_clus;
    // (the sd_arb instance lives below, after sd_rd/sd_wr are declared)
    wire [7:0]       sd_retries;
@@ -1775,7 +1782,7 @@ module top #(
                                                                           .sd_buf_addr(sd_buf_addr),
                                                                           .running(upd_running), .reboot(up_reboot), .err(upd_err),
                                                                           .progress(upd_progress), .total(upd_total), .phase(upd_phase),
-                                                                          .file_build(upd_build), .dbg_state(),
+                                                                          .file_build(upd_build), .dbg_state(upd_state), .dbg_regs(upd_dbg),
                                                                           .pri_ver(upd_pri_ver), .gld_ver(upd_gld_ver), .run_slot(upd_run_slot),
                                                                           .flash_csn(flash_csn), .flash_sck(up_sck),
                                                                           .flash_mosi(flash_mosi), .flash_miso(flash_miso));
@@ -1790,7 +1797,55 @@ module top #(
       assign upd_phase = 2'd0;     assign upd_build = 32'd0;
       assign upd_pri_ver = 56'd0;  assign upd_gld_ver = 56'd0;
       assign upd_run_slot = 8'h00;   // no slots: the menu shows VERSION only
+      assign upd_state = 5'd0;     assign upd_dbg = 128'd0;
       assign flash_csn = 1'b1;     assign flash_mosi = 1'b0;
+   end endgenerate
+
+   // ---- the JTAG debug register (JTAG_DEBUG builds only) --------------------
+   // 512 bits on ER1 (IR 0x32), captured in Capture-DR and shifted out LSB
+   // first. Word 0 and word 15 are fixed markers, so a reader can find the
+   // frame however many bits the TAP adds in front. The SD engine's error
+   // code is latched when an updater read fails, since a later request would
+   // clear it. Everything here is read across from clk_sys without
+   // synchronizing: it's meant for a design that has stopped and is holding
+   // still, not for watching one in motion.
+   reg [3:0]  upd_sd_code = 4'd0;
+   reg [15:0] upd_fires = 16'd0, upd_dones = 16'd0;
+   always @(posedge clk_sys) begin
+      if (up_fire) upd_fires <= upd_fires + 16'd1;
+      if (up_done) upd_dones <= upd_dones + 16'd1;
+      if (up_done && up_err) upd_sd_code <= sd_err_code;
+   end
+
+   generate if (JTAG_DEBUG && FAMILY == "ECP5") begin : g_jtag_dbg
+      // The words, from 0 (shifted out first):
+      //    0  "PEDB"                 8  root cluster
+      //    1  updater error, state,  9  FAT start
+      //       slot, phase           10  data start
+      //    2  last read's LBA       11  SD code at the updater's failure,
+      //    3  file size                 SD code now, retries, SD state
+      //    4  file cluster          12  updater reads fired, done
+      //    5  cur_clus              13  fs_err, fs_ready, progress
+      //    6  ret, fat_ret, sec     14  BUILD_ID
+      //    7  spc_log               15  "END!"
+      wire jtck, jtdi, jshift, jce1;
+      wire [511:0] snap = {32'h454E4421, BUILD_ID,
+                           8'd0, fs_err, 3'd0, fs_ready, upd_progress,
+                           upd_fires, upd_dones,
+                           4'd0, upd_sd_code, 4'd0, sd_err_code, sd_retries, 3'd0, sd_dbg,
+                           fs_data_start, fs_dbg_fat_start, fs_root_clus,
+                           24'd0, 4'd0, fs_spc_log,
+                           upd_dbg, up_lba,
+                           4'd0, upd_err, 3'd0, upd_state, upd_run_slot, 6'd0, upd_phase,
+                           32'h50454442};
+      reg [511:0] sr;
+      always @(posedge jtck) begin
+         if (jce1 && !jshift) sr <= snap;
+         else if (jce1)       sr <= {jtdi, sr[511:1]};
+      end
+      JTAGG u_jtag (.JTDO1(sr[0]), .JTDO2(1'b0), .JTDI(jtdi), .JTCK(jtck),
+                    .JSHIFT(jshift), .JCE1(jce1), .JCE2(), .JRTI1(), .JRTI2(),
+                    .JUPDATE(), .JRSTN());
    end endgenerate
 
    // While an update runs, the LEDs fill from D1 to D8 as it goes: blinking

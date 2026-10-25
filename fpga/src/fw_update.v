@@ -21,14 +21,18 @@
 //
 // WHEN IT RUNS. Once, after the filesystem is up and the drive has first
 // gone idle (top decides what idle means), so it never slows a boot. If
-// there is no file, or its BUILD_ID is the one we're running, it stops
-// there; that check is what keeps an update from looping. Otherwise it
-// runs two passes in the background, as the SD card's lowest-priority
-// user, while the drive keeps serving. The first reads the whole payload
-// and checks its CRC, and touches nothing. The second erases, programs
-// and reads back each sector. Then it waits until the drive has stayed
-// idle for REBOOT_HOLD more and pulls PROGRAMN. If the host never goes
-// quiet for that long, the new image waits for the next power-up.
+// there is no file, or its BUILD_ID isn't newer than the one we're running,
+// it stops there. BUILD_ID only goes up (minutes since 2026 with the top bit
+// set, from the Makefile; the top bit puts it above the older
+// month-day-hour-minute IDs), so an older file left on the card is ignored,
+// and the new build ignores its own file after the reboot, which is what
+// keeps an update from looping. Going back to an older build takes JTAG.
+// Otherwise it runs two passes in the background, as the SD card's
+// lowest-priority user, while the drive keeps serving. The first reads the
+// whole payload and checks its CRC, and touches nothing. The second erases,
+// programs and reads back each sector. Then it waits until the drive has
+// stayed idle for REBOOT_HOLD more and pulls PROGRAMN. If the host never
+// goes quiet for that long, the new image waits for the next power-up.
 //
 // VERSIONS. Every bitstream carries a comment in its header, put there by
 // the Makefile: "PEV:<BUILD_ID in hex>:<version>". The header starts after
@@ -97,6 +101,9 @@ module fw_update #(
                       // where we were loaded from: "P", "G", or "J" for
                       // neither (a JTAG load); $00 until the headers are read
                       output reg  [7:0]  run_slot,
+                      // the file cursor, for the JTAG debug register in top:
+                      // {ret, fat_ret, sec, cur_clus, file_clus, file_size}
+                      output wire [127:0] dbg_regs,
 
                       output wire        flash_csn,
                       output wire        flash_sck,
@@ -221,6 +228,10 @@ module fw_update #(
    reg [31:0] cur_clus;        // the file cursor: this cluster...
    reg [8:0]  sec;             // ...and this sector of it
    reg [31:0] file_clus, file_size;
+   reg [23:0] fat_val;         // a FAT entry as it arrives
+
+   assign dbg_regs = {3'd0, ret, 3'd0, fat_ret, 7'd0, sec, cur_clus, file_clus, file_size};
+
    reg [31:0] hdr_magic, hdr_board, hdr_len, hdr_crc, crc;
    reg [15:0] k;               // payload sector index
    reg        found, ent_end, started, match;
@@ -357,21 +368,24 @@ module fw_update #(
               ret <= S_FAT_GET; st <= S_RD;
            end
            S_FAT_GET: begin
-              // four bytes, little-endian, at (cur_clus & 127) * 4
+              // Four bytes, little-endian, at (cur_clus & 127) * 4. They
+              // gather in fat_val, not cur_clus: ra is still being worked
+              // out from cur_clus while they arrive, and overwriting it
+              // early points the last byte at some other entry.
               j  <= j + 1'b1;
               ra <= {cur_clus[6:0], 2'b00} + j[1:0];
               case (j)
-                10'd2: cur_clus[7:0]   <= q;
-                10'd3: cur_clus[15:8]  <= q;
-                10'd4: cur_clus[23:16] <= q;
+                10'd2: fat_val[7:0]   <= q;
+                10'd3: fat_val[15:8]  <= q;
+                10'd4: fat_val[23:16] <= q;
                 10'd5: begin
-                   if ({q[3:0], cur_clus[23:0]} >= 28'hFFFFFF8
-                       || {q[3:0], cur_clus[23:0]} < 28'd2) begin
+                   if ({q[3:0], fat_val[23:0]} >= 28'hFFFFFF8
+                       || {q[3:0], fat_val[23:0]} < 28'd2) begin
                       if (fat_ret == S_DIR) st <= S_QUIET;
                       else begin err <= E_SHORT; st <= S_FAIL; end
                    end else begin
-                      cur_clus <= {4'd0, q[3:0], cur_clus[23:0]}; sec <= 9'd0;
-                      lba <= clus_lba({4'd0, q[3:0], cur_clus[23:0]});
+                      cur_clus <= {4'd0, q[3:0], fat_val[23:0]}; sec <= 9'd0;
+                      lba <= clus_lba({4'd0, q[3:0], fat_val[23:0]});
                       ret <= fat_ret; st <= S_RD;
                    end
                 end
@@ -406,8 +420,8 @@ module fw_update #(
                  err <= E_HEADER; st <= S_FAIL;
               end else if (file_size < hdr_len + 32'd512) begin
                  err <= E_SHORT; st <= S_FAIL;
-              end else if (file_build == BUILD_ID) begin
-                 st <= S_QUIET;                       // already running it
+              end else if (file_build <= BUILD_ID) begin
+                 st <= S_QUIET;                       // not newer than this one
               end else begin
                  running <= 1'b1; phase <= 2'd1;
                  total <= hdr_len[24:9]; k <= 16'd0; progress <= 16'd0;

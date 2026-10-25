@@ -7,7 +7,10 @@
 // finding it means following the FAT. Ahead of it in the directory are a
 // volume label, a long-name piece, a deleted entry and a directory, all
 // carrying the same 8.3 name, and all of which have to be skipped. The file
-// itself is fragmented: clusters 10 -> 7 -> 12.
+// itself is fragmented: clusters 10 -> 7 -> 12, and long enough to reach
+// all three. The rest of the FAT sector is other files' entries, so reading
+// the wrong entry gives a wrong cluster, and the card answers a read past its
+// end with an error, the way a real one does.
 //
 // The flash is 256 KB here, with the golden image at 128 KB. Each case
 // checks that nothing at or above that address is ever written.
@@ -15,6 +18,8 @@
 // Cases, each from reset:
 //   1. a good file: written, read back, and reboot requested
 //   2. the same file again, now matching BUILD_ID: nothing happens
+//   2b. an older file: nothing happens either
+//   2c. a file with an old-style month-day-hour-minute ID: older, ignored
 //   3. a corrupted payload: refused on CRC, flash untouched
 //   4. a file for another board: refused, flash untouched
 //   5. no file at all: nothing happens
@@ -27,10 +32,10 @@
 
 module tb_fw_update;
 
-   localparam [31:0] RUNNING = 32'h10250900;   // the BUILD_ID we "are"
-   localparam [31:0] NEWER   = 32'h10251200;   // the file's BUILD_ID
-   localparam [31:0] OTHER   = 32'h09010000;   // some other build
-   localparam integer PAYLOAD_SECTORS = 6;
+   localparam [31:0] RUNNING = 32'h80068B27;   // the BUILD_ID we "are"
+   localparam [31:0] NEWER   = 32'h80068C00;   // the file's BUILD_ID
+   localparam [31:0] OTHER   = 32'h80001000;   // some other build
+   localparam integer PAYLOAD_SECTORS = 9;
    localparam integer FLASH_BYTES = 262144;
    localparam [23:0] GOLDEN = 24'h020000;
 
@@ -117,6 +122,10 @@ module tb_fw_update;
       reg [31:0] c;
       begin
          for (n = 0; n < 512*320; n = n + 1) disk[n] = 8'h00;
+         // Every other FAT entry in the sector belongs to some other file,
+         // with a nonzero top byte, the way a real FAT has. Reading the
+         // wrong entry then gives a wrong cluster instead of a lucky zero.
+         for (n = 0; n < 128; n = n + 1) put32(100*512 + n*4, 32'h0A000000 + n);
          // FAT: 2 -> 3 -> end (the directory), 10 -> 7 -> 12 -> end (the file)
          put32(100*512 + 2*4, 32'h00000003);
          put32(100*512 + 3*4, 32'h0FFFFFFF);
@@ -158,7 +167,7 @@ module tb_fw_update;
    // ---- the SD side: serve a sector the way sd_spi does ---------------------
    wire        req;
    wire [31:0] lba;
-   reg         fire = 0, sd_done = 0, sd_buf_we = 0;
+   reg         fire = 0, sd_done = 0, sd_buf_we = 0, sd_err = 0;
    reg [7:0]   sd_buf_wdata;
    reg [9:0]   sd_buf_addr;
    integer     sd_reads = 0;
@@ -168,7 +177,14 @@ module tb_fw_update;
       fire <= 1'b0;
       if (req && !fire && !busy_sd) fire <= 1'b1;
    end
-   always @(posedge clk) if (fire) begin
+   always @(posedge clk) if (fire && lba >= 320) begin
+      // past the end of the card: the read fails after a while
+      busy_sd = 1;
+      repeat (50) @(posedge clk);
+      sd_err <= 1'b1; sd_done <= 1'b1; @(posedge clk);
+      sd_err <= 1'b0; sd_done <= 1'b0;
+      busy_sd = 0;
+   end else if (fire) begin
       busy_sd = 1;
       sd_reads = sd_reads + 1;
       repeat (20) @(posedge clk);
@@ -236,7 +252,7 @@ module tb_fw_update;
                                        .clk(clk), .rst(rst), .start(start), .idle(idle),
                                        .root_clus(32'd2), .fat_start(32'd100), .data_start(32'd200),
                                        .spc_log(4'd2),
-                                       .req(req), .lba(lba), .fire(fire), .sd_done(sd_done), .sd_err(1'b0),
+                                       .req(req), .lba(lba), .fire(fire), .sd_done(sd_done), .sd_err(sd_err),
                                        .sd_buf_we(sd_buf_we), .sd_buf_wdata(sd_buf_wdata),
                                        .sd_buf_addr(sd_buf_addr),
                                        .running(running), .reboot(reboot), .err(err),
@@ -315,7 +331,7 @@ module tb_fw_update;
       run_case(5_000_000);
       check(was_running, "ran the update");
       check(err == 4'd0, "no error");
-      check(total == PAYLOAD_SECTORS, "six payload sectors");
+      check(total == PAYLOAD_SECTORS, "nine payload sectors");
       check(flash_matches(0), "the primary holds the payload");
       check(u_fm.golden_ok(0), "the golden image is untouched");
       check(u_fm.over_golden == 0, "nothing was written at or above the golden address");
@@ -330,6 +346,20 @@ module tb_fw_update;
       flash_setup(0, 1);
       run_case(5_000_000);
       check(!was_running && !reboot && err == 4'd0, "nothing happens");
+
+      $display("-- 2b. an older file");
+      put32(file_byte(0)+16, RUNNING - 1);
+      flash_setup(0, 1);
+      run_case(5_000_000);
+      check(!was_running && !reboot && err == 4'd0 && flash_untouched(0),
+            "nothing happens: newer files only");
+
+      $display("-- 2c. a file with an old-style ID");
+      put32(file_byte(0)+16, 32'h10251745);
+      flash_setup(0, 1);
+      run_case(5_000_000);
+      check(!was_running && !reboot && err == 4'd0 && flash_untouched(0),
+            "nothing happens: it sorts below every new ID");
 
       $display("-- 3. a corrupted payload");
       build_card(1, "R2  ", 1);

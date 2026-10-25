@@ -211,8 +211,10 @@ updater never touches the card during a boot. Then it looks for
 if:
 
 - there's no file
-- the file's `BUILD_ID` is the one that's running, which is what keeps an
-  update from repeating, so the file can stay on the card
+- the file's `BUILD_ID` isn't newer than the one that's running. That's
+  what keeps an update from repeating, so the file can stay on the card, and
+  it means an older file is ignored. Going back to an older build takes
+  JTAG (`make r2-flash-dual`).
 
 Otherwise it makes two passes, in the background. The drive keeps serving
 the whole time: the updater is the SD card's lowest-priority user, so a host
@@ -575,7 +577,7 @@ bit-meanings are below.
 |---|---|
 | 0 | `[24]` ready, `[16]` ok, `[11:8]` error code, `[4:0]` sd_spi state |
 | 1 | `[29:24]` last command, `[23:16]` retries used, `[7:0]` self-test stage |
-| 2 | **`BUILD_ID`**, the UTC `MMDDHHMM` stamp of the synthesis run |
+| 2 | **`BUILD_ID`**, minutes since 2026-01-01 00:00 UTC at synthesis, with the top bit set (`date -u -r $(( (0x<id> & 0x7FFFFFFF) * 60 + 1767225600 ))` turns it back into a date) |
 | 3, 4 | the first eight bytes of `profile.cfg` exactly as read |
 | 5 | boot chronometer: `[27:16]` ms to SD ready, `[11:0]` ms to resolver ready. `$FFF` means never |
 | 6 | clusters in the resolved chain |

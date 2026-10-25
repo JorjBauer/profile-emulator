@@ -36,8 +36,8 @@ module reporter #(
                      input  wire [255:0] dbg_txn,
                      input  wire [7:0]  dbg_fst,
                      input  wire [7:0]  dbg_retries,
-                     // Identifies the RUNNING bitstream: a UTC
-                     // MMDDHHMM stamp injected at synthesis. It is
+                     // Identifies the RUNNING bitstream: minutes
+                     // since 2026-01-01 UTC, injected at synthesis. It is
                      // reported on every SD line so a test round can
                      // confirm which build is actually running before
                      // trusting anything else it says.
