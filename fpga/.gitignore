@@ -16,3 +16,11 @@ profile_emu_*.bit
 *.kicad_sym.bak-*
 *-backups/
 *.kicad_pcb-bak
+
+# KiCad's per-user view and selection settings. The lock flags themselves
+# live in the board file.
+*.kicad_prl
+
+# Plot output from the hw-r2 scripts; the zips are what's committed.
+gerb/
+stencil-alt/
