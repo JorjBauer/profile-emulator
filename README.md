@@ -26,7 +26,7 @@ iCE40's carry chains became the bottleneck, and then moved to a ULX3S-12F
 Then I built two boards of my own around the same ECP5 in a TQFP-144. r1
 worked after some rework, but it had the wrong footprint for the flash chip,
 along with other mistakes. r2 fixed them, and it's been serving my //e since
-2026-10-23. r1 lives in the git history.
+2026-10-23.
 
 All of my testing is on a //e with a ProFile card whose ROM is 341-0299-B. I
 haven't tried an Apple ///.
