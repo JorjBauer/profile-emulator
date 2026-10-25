@@ -34,15 +34,15 @@
 // stayed idle for REBOOT_HOLD more and pulls PROGRAMN. If the host never
 // goes quiet for that long, the new image waits for the next power-up.
 //
-// VERSIONS. Every bitstream carries a comment in its header, put there by
-// the Makefile: "PEV:<BUILD_ID in hex>:<version>". The header starts after
-// the slot's 256 bytes of $FF, as $FF $00 and then the comment, so it sits
-// at a fixed place. At reset, before anything else, we read both slots'
-// headers. The version strings go to the menu, and whichever slot carries
-// our own BUILD_ID is the one we were loaded from (neither means a JTAG
-// load into SRAM). The primary is read again after it's rewritten, so the
-// menu shows what's waiting for the reboot; the slot we're running from
-// doesn't change.
+// WHAT'S IN EACH SLOT. Every bitstream carries a comment in its header, put
+// there by the Makefile: "PEV:<BUILD_ID in hex>". (Builds from before that
+// had ":<version>" after it, which is ignored.) The header starts after the
+// slot's 256 bytes of $FF, as $FF $00 and then the comment, so it sits at a
+// fixed place. At reset, before anything else, we read both slots' headers.
+// The build IDs go to the menu, and whichever slot carries our own BUILD_ID
+// is the one we were loaded from (neither means a JTAG load into SRAM). The
+// primary is read again after it's rewritten, so the menu shows what's
+// waiting for the reboot; the slot we're running from doesn't change.
 //
 // A failure before the second pass leaves the flash as it was. A
 // failure during it leaves the primary half written: the running image
@@ -93,11 +93,11 @@ module fw_update #(
                       output reg  [31:0] file_build,
                       output wire [4:0]  dbg_state,
 
-                      // The two slots' versions, seven ASCII characters
-                      // from the top byte down, $00 padded; "EMPTY" for an
-                      // erased slot, "UNKNOWN" for one with no version.
-                      output reg  [55:0] pri_ver,
-                      output reg  [55:0] gld_ver,
+                      // The two slots' build IDs as eight hex digits in
+                      // ASCII, from the top byte down; "EMPTY" for an erased
+                      // slot, "UNKNOWN" for one with no ID in its header.
+                      output reg  [63:0] pri_id,
+                      output reg  [63:0] gld_id,
                       // where we were loaded from: "P", "G", or "J" for
                       // neither (a JTAG load); $00 until the headers are read
                       output reg  [7:0]  run_slot,
@@ -137,7 +137,8 @@ module fw_update #(
                    S_P2_PROG = 5'd16, S_PROG_W  = 5'd17, S_VER_W   = 5'd18,
                    S_DONE    = 5'd19, S_REBOOT  = 5'd20,
                    S_FAIL    = 5'd21, S_QUIET   = 5'd22,
-                   S_PROBE   = 5'd23, S_PROBE_W = 5'd24;
+                   S_PROBE   = 5'd23, S_PROBE_W = 5'd24,
+                   S_FAT_USE = 5'd25;
 
    reg [4:0] st, ret, fat_ret;
    assign dbg_state = st;
@@ -195,7 +196,7 @@ module fw_update #(
 
    wire [8:0] spc = 9'd1 << spc_log;
 
-   // ---- the version headers -------------------------------------------------
+   // ---- the slot headers ----------------------------------------------------
    // What a slot's header has to start with, and our BUILD_ID as the eight
    // hex digits it appears as there.
    function [7:0] hex_digit(input [3:0] n);
@@ -210,7 +211,6 @@ module fw_update #(
         5'd3:  want_byte = "E";
         5'd4:  want_byte = "V";
         5'd5:  want_byte = ":";
-        5'd14: want_byte = ":";
         default: want_byte = hex_digit(BUILD_ID[31 - 4*(i - 5'd6) -: 4]);
       endcase
    endfunction
@@ -218,17 +218,17 @@ module fw_update #(
    reg        pr_slot;        // 0 the primary, 1 the golden copy
    reg        pr_again;       // a re-read after the write: back to S_DONE
    reg [4:0]  pr_i;           // header byte index
-   reg        pr_hdr, pr_ours, pr_empty, pr_end;
-   reg [55:0] pr_ver;
-   wire [55:0] pr_result = pr_hdr   ? (pr_ver == 56'd0 ? {"?", 48'd0} : pr_ver)
-               : pr_empty ? {"EMPTY", 16'd0}
-               : "UNKNOWN";
+   reg        pr_hdr, pr_ours, pr_empty;
+   reg [63:0] pr_id;
+   wire [63:0] pr_result = pr_hdr   ? pr_id
+               : pr_empty ? {"EMPTY", 24'd0}
+               : {"UNKNOWN", 8'd0};
 
    // ---- state ---------------------------------------------------------------
    reg [31:0] cur_clus;        // the file cursor: this cluster...
    reg [8:0]  sec;             // ...and this sector of it
    reg [31:0] file_clus, file_size;
-   reg [23:0] fat_val;         // a FAT entry as it arrives
+   reg [27:0] fat_val;         // a FAT entry as it arrives
 
    assign dbg_regs = {3'd0, ret, 3'd0, fat_ret, 7'd0, sec, cur_clus, file_clus, file_size};
 
@@ -254,34 +254,32 @@ module fw_update #(
          err <= E_NONE; progress <= 16'd0; total <= 16'd0; phase <= 2'd0;
          started <= 1'b0; file_build <= 32'd0; ra <= 9'd0; j <= 10'd0;
          pr_slot <= 1'b0; pr_again <= 1'b0; run_slot <= 8'h00;
-         pri_ver <= 56'd0; gld_ver <= 56'd0;
+         pri_id <= 64'd0; gld_id <= 64'd0;
       end else begin
          case (st)
-           // ---- read a slot's version header --------------------------------
+           // ---- read a slot's header ---------------------------------------
            S_PROBE: begin
               f_op <= OP_READ; f_addr <= (pr_slot ? GOLDEN_ADDR : 24'd0) + 24'h100;
-              f_len <= 10'd24; f_go <= 1'b1;
+              f_len <= 10'd14; f_go <= 1'b1;
               pr_i <= 5'd0; pr_hdr <= 1'b1; pr_ours <= 1'b1; pr_empty <= 1'b1;
-              pr_end <= 1'b0; pr_ver <= 56'd0;
+              pr_id <= 64'd0;
               st <= S_PROBE_W;
            end
            S_PROBE_W: begin
               if (f_rd_stb) begin
                  pr_i <= pr_i + 1'b1;
                  if (pr_i < 5'd2 && f_rdata != 8'hFF) pr_empty <= 1'b0;
-                 if (pr_i < 5'd6 || pr_i == 5'd14) begin
+                 if (pr_i < 5'd6) begin
                     if (f_rdata != want_byte(pr_i)) pr_hdr <= 1'b0;
-                 end else if (pr_i < 5'd14) begin
+                 end else begin
+                    // the build ID's eight digits, kept as text for the menu
                     if (f_rdata != want_byte(pr_i)) pr_ours <= 1'b0;
-                 end else if (pr_i < 5'd22) begin
-                    // the version, up to seven characters, ended by $00
-                    if (f_rdata == 8'h00) pr_end <= 1'b1;
-                    else if (!pr_end) pr_ver[55 - 8*(pr_i - 5'd15) -: 8] <= f_rdata;
+                    pr_id[63 - 8*(pr_i - 5'd6) -: 8] <= f_rdata;
                  end
               end
               if (f_done) begin
-                 if (!pr_slot) pri_ver <= pr_result;
-                 else          gld_ver <= pr_result;
+                 if (!pr_slot) pri_id <= pr_result;
+                 else          gld_id <= pr_result;
                  if (pr_again) begin
                     st <= S_DONE;
                  end else if (!pr_slot) begin
@@ -378,19 +376,22 @@ module fw_update #(
                 10'd2: fat_val[7:0]   <= q;
                 10'd3: fat_val[15:8]  <= q;
                 10'd4: fat_val[23:16] <= q;
-                10'd5: begin
-                   if ({q[3:0], fat_val[23:0]} >= 28'hFFFFFF8
-                       || {q[3:0], fat_val[23:0]} < 28'd2) begin
-                      if (fat_ret == S_DIR) st <= S_QUIET;
-                      else begin err <= E_SHORT; st <= S_FAIL; end
-                   end else begin
-                      cur_clus <= {4'd0, q[3:0], fat_val[23:0]}; sec <= 9'd0;
-                      lba <= clus_lba({4'd0, q[3:0], fat_val[23:0]});
-                      ret <= fat_ret; st <= S_RD;
-                   end
-                end
+                10'd5: begin fat_val[27:24] <= q[3:0]; st <= S_FAT_USE; end
                 default: ;
               endcase
+           end
+           // A clock of its own: straight off the block RAM into the
+           // compare and clus_lba's subtract, shift and add is too long a
+           // path for 50 MHz.
+           S_FAT_USE: begin
+              if (fat_val >= 28'hFFFFFF8 || fat_val < 28'd2) begin
+                 if (fat_ret == S_DIR) st <= S_QUIET;
+                 else begin err <= E_SHORT; st <= S_FAIL; end
+              end else begin
+                 cur_clus <= {4'd0, fat_val}; sec <= 9'd0;
+                 lba <= clus_lba({4'd0, fat_val});
+                 ret <= fat_ret; st <= S_RD;
+              end
            end
 
            // ---- the header --------------------------------------------------
@@ -472,7 +473,7 @@ module fw_update #(
            // ---- pass 2: erase, program and verify, a sector at a time -------
            S_P2: begin
               if (k == total) begin
-                 // read the new primary's version, then wait for the reboot
+                 // read the new primary's build ID, then wait for the reboot
                  phase <= 2'd3; wait_cnt <= 32'd0;
                  pr_slot <= 1'b0; pr_again <= 1'b1; st <= S_PROBE;
               end else if (k[6:0] == 7'd0) begin

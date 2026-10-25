@@ -26,7 +26,8 @@
 //   6. a flash that drops a bit: refused on verify
 //   7. a good file, but the drive never goes idle: nothing starts
 //   8. host activity after the write holds the reboot off
-//   9. the version headers: which slot we came from, EMPTY and UNKNOWN
+//   9. the slot headers: which slot we came from, the build IDs, EMPTY and
+//      UNKNOWN, and a header in the older "PEV:<build>:<version>" form
 
 `default_nettype none
 
@@ -91,27 +92,36 @@ module tb_fw_update;
       end
    endfunction
 
-   // A bitstream's version header, as the Makefile writes it, 256 bytes
-   // into a slot: $FF $00 "PEV:<build>:<version>" $00
+   // A bitstream's header, as the Makefile writes it, 256 bytes into a
+   // slot: $FF $00 "PEV:<build>" $00. Builds from before that wrote
+   // "PEV:<build>:1.0" (old = 1).
    function [7:0] hex_digit(input [3:0] n);
       hex_digit = (n < 10) ? "0" + n : "A" + n - 10;
    endfunction
 
-   function [7:0] header_byte(input integer i, input [31:0] build, input [23:0] ver);
+   function [7:0] header_byte(input integer i, input [31:0] build, input old);
       begin
          if (i == 0)       header_byte = 8'hFF;
          else if (i == 1)  header_byte = 8'h00;
          else if (i < 6)   header_byte = "PEV:" >> (8 * (5 - i));
          else if (i < 14)  header_byte = hex_digit(build[31 - 4*(i-6) -: 4]);
-         else if (i == 14) header_byte = ":";
-         else if (i < 18)  header_byte = ver[23 - 8*(i-15) -: 8];
+         else if (old && i < 18) header_byte = ":1.0" >> (8 * (17 - i));
          else              header_byte = 8'h00;
       end
    endfunction
 
-   // the new image carries version 2.0 in its header
+   // a build ID as the eight hex digits the updater reports
+   function [63:0] id_text(input [31:0] build);
+      integer d;
+      begin
+         for (d = 0; d < 8; d = d + 1)
+           id_text[63 - 8*d -: 8] = hex_digit(build[31 - 4*d -: 4]);
+      end
+   endfunction
+
+   // the new image's header
    function [7:0] payload(input integer at);
-      if (at >= 256 && at < 256 + 24) payload = header_byte(at - 256, NEWER, "2.0");
+      if (at >= 256 && at < 256 + 24) payload = header_byte(at - 256, NEWER, 0);
       else payload = (at * 7 + (at >> 9) * 13 + 8'h5A) & 8'hFF;
    endfunction
 
@@ -210,17 +220,21 @@ module tb_fw_update;
                                                              .csn(flash_csn), .sck(flash_sck), .mosi(flash_mosi), .miso(flash_miso));
 
    // What the flash holds before each case. A slot is one of:
-   //   0  version 1.0, our own BUILD_ID       1  version 0.9, another build
-   //   2  no version header (an old image)    3  erased
+   //   0  our own BUILD_ID                  1  another build
+   //   2  no header comment of ours         3  erased
+   //   4  our own BUILD_ID, older header form
    task slot_setup(input [23:0] base, input integer kind);
       integer n;
       begin
          if (kind == 0)
            for (n = 0; n < 24; n = n + 1)
-             u_fm.mem[base + 256 + n] = header_byte(n, RUNNING, "1.0");
+             u_fm.mem[base + 256 + n] = header_byte(n, RUNNING, 0);
          else if (kind == 1)
            for (n = 0; n < 24; n = n + 1)
-             u_fm.mem[base + 256 + n] = header_byte(n, OTHER, "0.9");
+             u_fm.mem[base + 256 + n] = header_byte(n, OTHER, 0);
+         else if (kind == 4)
+           for (n = 0; n < 24; n = n + 1)
+             u_fm.mem[base + 256 + n] = header_byte(n, RUNNING, 1);
          else if (kind == 3)
            for (n = 0; n < 512; n = n + 1) u_fm.mem[base + n] = 8'hFF;
       end
@@ -244,7 +258,7 @@ module tb_fw_update;
    wire [1:0]  phase;
    wire [31:0] file_build;
    wire [4:0]  dbg_state;
-   wire [55:0] pri_ver, gld_ver;
+   wire [63:0] pri_id, gld_id;
    wire [7:0]  run_slot;
 
    fw_update #(.CLK_HZ(50_000_000), .BUILD_ID(RUNNING), .GOLDEN_ADDR(GOLDEN),
@@ -258,7 +272,7 @@ module tb_fw_update;
                                        .running(running), .reboot(reboot), .err(err),
                                        .progress(progress), .total(total), .phase(phase),
                                        .file_build(file_build), .dbg_state(dbg_state),
-                                       .pri_ver(pri_ver), .gld_ver(gld_ver), .run_slot(run_slot),
+                                       .pri_id(pri_id), .gld_id(gld_id), .run_slot(run_slot),
                                        .flash_csn(flash_csn), .flash_sck(flash_sck),
                                        .flash_mosi(flash_mosi), .flash_miso(flash_miso));
 
@@ -338,8 +352,8 @@ module tb_fw_update;
       check(reboot, "reboot requested");
       check(file_build == NEWER, "read the file's BUILD_ID");
       check(run_slot == "P", "running from the primary");
-      check(pri_ver == {"2.0", 32'd0}, "the primary reads as the new version");
-      check(gld_ver == {"0.9", 32'd0}, "the golden copy's version");
+      check(pri_id == id_text(NEWER), "the primary reads as the new build");
+      check(gld_id == id_text(OTHER), "the golden copy's build");
 
       $display("-- 2. the same file, already running it");
       put32(file_byte(0)+16, RUNNING);
@@ -423,23 +437,27 @@ module tb_fw_update;
       repeat (200) @(posedge clk);
       check(reboot, "reboots once idle lasts");
 
-      $display("-- 9. the version headers");
+      $display("-- 9. the slot headers");
       idle = 0;   // so nothing starts
       flash_setup(0, 1);
       probe_only;
-      check(run_slot == "P" && pri_ver == {"1.0", 32'd0} && gld_ver == {"0.9", 32'd0},
-            "ours in the primary: P, 1.0, 0.9");
+      check(run_slot == "P" && pri_id == id_text(RUNNING) && gld_id == id_text(OTHER),
+            "ours in the primary: P, and both build IDs");
       flash_setup(1, 0);
       probe_only;
-      check(run_slot == "G" && pri_ver == {"0.9", 32'd0} && gld_ver == {"1.0", 32'd0},
+      check(run_slot == "G" && pri_id == id_text(OTHER) && gld_id == id_text(RUNNING),
             "ours in the golden copy: G");
       flash_setup(1, 1);
       probe_only;
       check(run_slot == "J", "ours in neither: J (a JTAG load)");
       flash_setup(3, 2);
       probe_only;
-      check(pri_ver == {"EMPTY", 16'd0} && gld_ver == "UNKNOWN" && run_slot == "J",
-            "an erased primary and an unversioned golden copy");
+      check(pri_id == {"EMPTY", 24'd0} && gld_id == {"UNKNOWN", 8'd0} && run_slot == "J",
+            "an erased primary and a golden copy with no build ID");
+      flash_setup(1, 4);
+      probe_only;
+      check(run_slot == "G" && gld_id == id_text(RUNNING),
+            "the older header form still reads as its build");
       check(u_fm.writes == 0, "reading the headers writes nothing");
 
       $display("");

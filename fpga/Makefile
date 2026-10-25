@@ -64,23 +64,13 @@ SRC     := src/top.v src/profile_bus.v src/profile_target.v src/sd_spi.v \
            src/uart_tx.v src/uart_rx.v src/reporter.v src/bus_capture.v src/sd_arb.v src/usb_prov.v \
            src/spi_flash.v src/fw_update.v
 
-# The release version, which the select menu shows. Bump VERSION for every
-# build that goes out. Up to seven characters of 0-9, A-Z, '.' and '-': the
-# //e shows it in uppercase, and the bitstream header (below) uses ':' as its
-# separator.
-VERSION := $(shell cat VERSION 2>/dev/null)
-ifeq ($(shell echo '$(VERSION)' | grep -Ex '[0-9A-Z.-]{1,7}'),)
-$(error VERSION must be 1 to 7 characters of 0-9, A-Z, '.' and '-', not "$(VERSION)")
-endif
-
 # The parameters every ULX3S build carries.
 #
 # USE_RSTBTN=0: the ULX3S rst_n pad is FIRE1, which idles LOW (PULLMODE=DOWN),
 # and top.v's reset term is USE_RSTBTN & ~rst_n, so honoring it holds the whole
 # design in reset forever. POR still resets at configuration; FIRE1 is simply
 # inert.
-ECP5_PARAMS := -set FAMILY \"ECP5\" -set USE_PLL 1 -set USE_RSTBTN 0 \
-               -set VERSION \"$(VERSION)\"
+ECP5_PARAMS := -set FAMILY \"ECP5\" -set USE_PLL 1 -set USE_RSTBTN 0
 
 # Kept for `make stat`, which needs no BUILD_ID; the real builds stamp one.
 #
@@ -124,7 +114,8 @@ BOOTADDR ?=
 #
 # BUILD_ID is the minutes since 2026-01-01 00:00 UTC when synthesis started,
 # with the top bit set, as eight hex digits. It only ever goes up, which is
-# what lets r2's updater install only a newer file (see src/fw_update.v).
+# what lets r2's updater install only a newer file (see src/fw_update.v), and
+# it's what the select menu shows as the build.
 # The top bit puts every one above the month-day-hour-minute stamps builds
 # used before (at most $12312359), so an old update file left on a card
 # reads as older and is ignored. 31 bits of minutes last about 4,000 years.
@@ -132,10 +123,10 @@ BOOTADDR ?=
 #
 #   date -u -r $$(( (0x<BUILD_ID> & 0x7FFFFFFF) * 60 + 1767225600 ))
 #
-# Every bitstream's header carries a comment, "PEV:<BUILD_ID>:<VERSION>", added
-# to the .config ahead of nextpnr's own. It's the first thing after the
-# header's $FF $00, so r2's updater can read any flash slot's version from a
-# fixed place (see src/fw_update.v).
+# Every bitstream's header carries a comment, "PEV:<BUILD_ID>", added to the
+# .config ahead of nextpnr's own. It's the first thing after the header's $FF
+# $00, so r2's updater can read any flash slot's build from a fixed place
+# (see src/fw_update.v).
 #
 # --compress + --freq 38.8 + fast-read are the INSTANT-ON flags for the FLASHED
 # copy. At ecppack's 2.4 MHz default MCLK, an uncompressed 5.4 Mbit stream takes
@@ -146,7 +137,7 @@ BOOTADDR ?=
 # FPGA blank. SRAM loads use _nextflash.bit instead.
 define ECP5_BUILD
 
-$(1).json: $$(SRC) $(5) $$(BLOBS) VERSION
+$(1).json: $$(SRC) $(5) $$(BLOBS)
 	@printf '%08X\n' $$$$(( 0x80000000 | (($$$$(date -u +%s) - 1767225600) / 60) )) > .build_id
 	@cp .build_id $(1).buildid
 	@echo "BUILD_ID $$$$(cat .build_id) ($(1), $$$$(date -u '+%Y-%m-%d %H:%M') UTC)"
@@ -161,13 +152,13 @@ $(1).config: $(1).json $(if $(3),$(3),$$(LPF))
 	  --lpf $(if $(3),$(3),$$(LPF)) --textcfg $$@ --freq 50
 
 $(1).bit: $(1).config
-	awk -v c="PEV:$$$$(cat $(1).buildid):$$(VERSION)" \
+	awk -v c="PEV:$$$$(cat $(1).buildid)" \
 	  'NR == 1 { print; print ".comment " c; next } { print }' $$< > $$@.cfg
 	ecppack --idcode 0x21111043 --compress --freq $$(FLASHFREQ) --spimode fast-read $$(BOOTADDR) $$@.cfg $$@
 	rm -f $$@.cfg
 
 $(1)_nextflash.bit: $(1).config
-	awk -v c="PEV:$$$$(cat $(1).buildid):$$(VERSION)" \
+	awk -v c="PEV:$$$$(cat $(1).buildid)" \
 	  'NR == 1 { print; print ".comment " c; next } { print }' $$< > $$@.cfg
 	ecppack --idcode 0x21111043 --freq 38.8 $$@.cfg $$@
 	rm -f $$@.cfg

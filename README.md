@@ -173,19 +173,20 @@ testing.)
 For an update from the SD card, `make r2-update` builds `R2UPDATE.BIN`. Copy
 it to the root of the card and power the board up. It waits until the drive
 is idle, so it never slows a boot. If the file holds a newer build than the
-one running, the LEDs fill up twice (once checking the file, once writing it) while the
-drive keeps serving. After five seconds with no activity from the //e, the
-board reboots into the new build. The file can stay on the card; it's
-skipped once it's the version that's running, and an older file is always
-skipped. Going back to an older build takes JTAG. `fpga/README.md` has the
-details under "Updating from the SD card".
+one running, the LEDs fill up twice (once checking the file, once writing
+it) while the drive keeps serving. After five seconds with no activity from
+the //e, the board reboots into the new build. The file can stay on the
+card; it's skipped once it's the build that's running, and an older file is
+always skipped. Going back to an older build takes JTAG. `fpga/README.md`
+has the details under "Updating from the SD card".
 
-To check which version a board is running, hold open-apple while the //e
-boots, and the image menu comes up. Row 2 shows the version and which copy
-it was loaded from, such as `VERSION 1.0 (PRIMARY)`. It says `GOLDEN` if the
-first copy was damaged and the board fell back. The bottom row shows what
-each copy in the flash holds, which only differs from row 2 when an update
-is waiting for its reboot. (The menu needs at least one image on the card.)
+To check which build a board is running, hold open-apple while the //e
+boots, and the image menu comes up. Row 2 shows the build ID and which copy
+it was loaded from, such as `BUILD 80068B67 (PRIMARY)`. Build IDs only go
+up, so a higher one is newer. It says `GOLDEN` if the first copy was damaged
+and the board fell back. The bottom row shows what each copy in the flash
+holds, which only differs from row 2 when an update is waiting for its
+reboot. (The menu needs at least one image on the card.)
 
 There are no prebuilt bitstreams yet, so you need the same tools as the ULX3S
 build.

@@ -171,28 +171,29 @@ image padded to whole sectors. The header holds `PEFW`, the board (`R2`), the
 payload's length, its CRC-32 and its `BUILD_ID`. Put it in the root of the
 card.
 
-### Versions
+### Which build is where
 
-`fpga/VERSION` holds the release version, up to seven characters of `0-9`,
-`A-Z`, `.` and `-`. Bump it for every build that goes out. The build puts it
-in two places: in the gateware, as the `VERSION` parameter, and in the
-bitstream's header as a comment, `PEV:<BUILD_ID>:<VERSION>`, ahead of
+There's no separate version number. The `BUILD_ID` does the job: it's the
+minutes since 2026-01-01 00:00 UTC with the top bit set, so it only goes up,
+and a higher one is always a newer build. The build puts it in the gateware
+and in the bitstream's header as a comment, `PEV:<BUILD_ID>`, ahead of
 nextpnr's own. The header comes right after a slot's 256 bytes of $FF, so the
 comment always starts 258 bytes into the slot.
 
 At reset, before anything else, the updater reads both slots' headers. That
-takes about 40 microseconds and doesn't touch the SD card. Whichever slot
+takes about 30 microseconds and doesn't touch the SD card. Whichever slot
 carries the running `BUILD_ID` is the one we were loaded from. If neither
 does, the gateware came in over JTAG. A slot can also read `EMPTY` (erased),
-or `UNKNOWN` (written before versions existed, like the golden copy on a
-board flashed before this). After an update writes the primary, it reads the
+or `UNKNOWN` (no build ID in its header). Headers written by builds from
+before this change say `PEV:<BUILD_ID>:1.0`, and the updater reads the build
+ID out of those too. After an update writes the primary, it reads the
 primary's header again, so the menu shows what's waiting for the reboot.
 
 The select menu shows all of it, from the info block (`selector/SELECTOR.md`
 has the layout):
 
-    VERSION 1.0 (PRIMARY)            row 2: what's running, and its slot
-    PRIMARY 1.0  GOLDEN 1.0          bottom row: what each slot holds
+    BUILD 80068B67 (PRIMARY)            row 2: what's running, and its slot
+    PRIMARY 80068B67  GOLDEN 80068B38   bottom row: what each slot holds
 
 The ULX3S shows only the first line, without a slot. The Teensy shows neither.
 

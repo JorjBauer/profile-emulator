@@ -429,8 +429,8 @@ module tb_top_iie #(
       check(dut.knock_menu === 1'b1, "and forces the menu");
       iie_read_block(24'hFFFFC0);
       check(got_data[4] === 8'hA5, "info block serves the emulator signature");
-      check(got_data[20] === "D" && got_data[21] === "E" && got_data[22] === "V"
-            && got_data[24] === 8'h00, "and the version, with no flash slots here");
+      check(got_data[16] === "0" && got_data[23] === "0" && got_data[24] === 8'h00,
+            "and the build (00000000 here), with no flash slots");
       iie_read_block(24'hFFFFC1);
       check(got_data[0] === dut.g_sel.u_sel.boot_rom[0]
             && got_data[1] === dut.g_sel.u_sel.boot_rom[1],

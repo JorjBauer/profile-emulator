@@ -55,11 +55,12 @@ module selector #(
                      // this is low.
                      input  wire        window_live,
 
-                     // versions for the info block: ours, and the two flash
-                     // slots' with the one we came from (see fw_update.v)
-                     input  wire [55:0] version,
-                     input  wire [55:0] pri_ver,
-                     input  wire [55:0] gld_ver,
+                     // build IDs for the info block, as eight hex digits of
+                     // ASCII: ours, and the two flash slots' with the one we
+                     // came from (see fw_update.v)
+                     input  wire [63:0] build_id,
+                     input  wire [63:0] pri_id,
+                     input  wire [63:0] gld_id,
                      input  wire [7:0]  run_slot,
 
                      // catalog RAM, filled by the scanner
@@ -133,13 +134,13 @@ module selector #(
    // ---- the info block -----------------------------------------------------
    // Layout from SELECTOR.md. $A5 is how the 6502 side tells it is talking to
    // an emulator at all, and bit 0 of byte 5 is what makes the menu appear
-   // whether or not open-apple is held. The version fields are seven bytes
-   // of ASCII each, and the menu skips any $00 in them, so a short string
-   // can be padded at either end.
+   // whether or not open-apple is held. The build ID fields are eight bytes
+   // of ASCII each, and the menu skips any $00 in them, so a shorter string
+   // ("EMPTY") can be padded.
    function [7:0] info_byte(input [9:0] a);
-      if (a >= 10'd16 && a <= 10'd22)      info_byte = version[55 - 8*(a - 10'd16) -: 8];
-      else if (a >= 10'd32 && a <= 10'd38) info_byte = pri_ver[55 - 8*(a - 10'd32) -: 8];
-      else if (a >= 10'd40 && a <= 10'd46) info_byte = gld_ver[55 - 8*(a - 10'd40) -: 8];
+      if (a >= 10'd16 && a <= 10'd23)      info_byte = build_id[63 - 8*(a - 10'd16) -: 8];
+      else if (a >= 10'd32 && a <= 10'd39) info_byte = pri_id[63 - 8*(a - 10'd32) -: 8];
+      else if (a >= 10'd40 && a <= 10'd47) info_byte = gld_id[63 - 8*(a - 10'd40) -: 8];
       else
         case (a)
           10'd0:  info_byte = img_count;

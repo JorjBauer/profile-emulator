@@ -115,9 +115,6 @@ module top #(
              // SD line, word 2, so the running firmware identifies itself.
              // 0 = a build that bypassed the flow.
              parameter [31:0]  BUILD_ID = 32'h0,
-             // The release version, up to seven characters, from the VERSION
-             // file (chparam again). The select menu shows it.
-             parameter [55:0]  VERSION  = "DEV",
              // The system clock this build actually runs at. 50 MHz is the
              // design point. Every protocol constant is in clock cycles, so a
              // different CLK_HZ stretches them in real time. Blocks that need
@@ -525,7 +522,7 @@ module top #(
    wire [15:0]      upd_progress, upd_total;
    wire [1:0]       upd_phase;
    wire [31:0]      upd_build;
-   wire [55:0]      upd_pri_ver, upd_gld_ver;
+   wire [63:0]      upd_pri_id, upd_gld_id;
    wire [7:0]       upd_run_slot;
    wire [4:0]       upd_state;
    wire [127:0]     upd_dbg;
@@ -1554,6 +1551,19 @@ module top #(
    // only until a choice is made, so this cannot loop.
    assign sel_want = 1'b1;
 
+   // Our BUILD_ID as eight hex digits of ASCII, for the menu
+   function [63:0] hex_text(input [31:0] v);
+      integer i;
+      reg [3:0] n;
+      begin
+         for (i = 0; i < 8; i = i + 1) begin
+            n = v[31 - 4*i -: 4];
+            hex_text[63 - 8*i -: 8] = (n < 4'd10) ? "0" + n : "A" + n - 4'd10;
+         end
+      end
+   endfunction
+   wire [63:0] build_txt = hex_text(BUILD_ID);
+
    generate
       if (SELECTOR_ENABLE) begin : g_sel
          selector u_sel (
@@ -1564,7 +1574,7 @@ module top #(
                          .armed(sel_armed && sel_want && (prev_blk == 24'hFFFFFF)),
                          .window_live(window_live),
                          .cat_addr(sel_cat_addr), .cat_data(fs_cat_data),
-                         .version(VERSION), .pri_ver(upd_pri_ver), .gld_ver(upd_gld_ver),
+                         .build_id(build_txt), .pri_id(upd_pri_id), .gld_id(upd_gld_id),
                          .run_slot(upd_run_slot),
                          .sel_idx(sel_idx), .sel_stb(sel_stb),
                          .hit(sel_hit), .boot_hit(sel_boot_hit), .rdata(sel_data));
@@ -1783,7 +1793,7 @@ module top #(
                                                                           .running(upd_running), .reboot(up_reboot), .err(upd_err),
                                                                           .progress(upd_progress), .total(upd_total), .phase(upd_phase),
                                                                           .file_build(upd_build), .dbg_state(upd_state), .dbg_regs(upd_dbg),
-                                                                          .pri_ver(upd_pri_ver), .gld_ver(upd_gld_ver), .run_slot(upd_run_slot),
+                                                                          .pri_id(upd_pri_id), .gld_id(upd_gld_id), .run_slot(upd_run_slot),
                                                                           .flash_csn(flash_csn), .flash_sck(up_sck),
                                                                           .flash_mosi(flash_mosi), .flash_miso(flash_miso));
 
@@ -1795,8 +1805,8 @@ module top #(
       assign upd_running = 1'b0;   assign upd_err = 4'd0;
       assign upd_progress = 16'd0; assign upd_total = 16'd0;
       assign upd_phase = 2'd0;     assign upd_build = 32'd0;
-      assign upd_pri_ver = 56'd0;  assign upd_gld_ver = 56'd0;
-      assign upd_run_slot = 8'h00;   // no slots: the menu shows VERSION only
+      assign upd_pri_id = 64'd0;   assign upd_gld_id = 64'd0;
+      assign upd_run_slot = 8'h00;   // no slots: the menu shows our build only
       assign upd_state = 5'd0;     assign upd_dbg = 128'd0;
       assign flash_csn = 1'b1;     assign flash_mosi = 1'b0;
    end endgenerate
