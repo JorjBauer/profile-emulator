@@ -19,18 +19,31 @@
 //   12  CRC-32 of the payload (the zlib one)
 //   16  the payload's BUILD_ID
 //
-// WHEN IT RUNS. Once, after the filesystem is up. If there is no file,
-// or its BUILD_ID is the one we're running, it stops there and the drive
-// never notices; that check is what keeps an update from looping.
-// Otherwise it takes the drive (`active` holds the protocol target in
-// reset) and runs two passes. The first reads the whole payload and
-// checks its CRC, and touches nothing. The second erases, programs and
-// reads back each sector. Then it pulls PROGRAMN.
+// WHEN IT RUNS. Once, after the filesystem is up and the drive has first
+// gone idle (top decides what idle means), so it never slows a boot. If
+// there is no file, or its BUILD_ID is the one we're running, it stops
+// there; that check is what keeps an update from looping. Otherwise it
+// runs two passes in the background, as the SD card's lowest-priority
+// user, while the drive keeps serving. The first reads the whole payload
+// and checks its CRC, and touches nothing. The second erases, programs
+// and reads back each sector. Then it waits until the drive has stayed
+// idle for REBOOT_HOLD more and pulls PROGRAMN. If the host never goes
+// quiet for that long, the new image waits for the next power-up.
 //
-// A failure before the second pass leaves the flash as it was and gives
-// the drive back. A failure during it leaves the primary half written:
-// the running image is unaffected, and the next power-up falls back to
-// the golden image, which finds the same file and tries again.
+// VERSIONS. Every bitstream carries a comment in its header, put there by
+// the Makefile: "PEV:<BUILD_ID in hex>:<version>". The header starts after
+// the slot's 256 bytes of $FF, as $FF $00 and then the comment, so it sits
+// at a fixed place. At reset, before anything else, we read both slots'
+// headers. The version strings go to the menu, and whichever slot carries
+// our own BUILD_ID is the one we were loaded from (neither means a JTAG
+// load into SRAM). The primary is read again after it's rewritten, so the
+// menu shows what's waiting for the reboot; the slot we're running from
+// doesn't change.
+//
+// A failure before the second pass leaves the flash as it was. A
+// failure during it leaves the primary half written: the running image
+// is unaffected, and the next power-up falls back to the golden image,
+// which finds the same file and tries again.
 
 `default_nettype none
 
@@ -41,15 +54,17 @@ module fw_update #(
                    parameter [87:0]  NAME        = "R2UPDATEBIN",
                    parameter [23:0]  GOLDEN_ADDR = 24'h100000,
                    parameter [23:0]  FLASH_ID    = 24'hEF4018,
-                   // How long the finished display stays up before the
-                   // reboot. A testbench shortens it.
-                   parameter integer REBOOT_DELAY = CLK_HZ / 2
+                   // How long idle has to stay high, on top of whatever
+                   // top needed to raise it, before the reboot. A
+                   // testbench shortens it.
+                   parameter integer REBOOT_HOLD = CLK_HZ * 4
                    ) (
                       input  wire        clk,
                       input  wire        rst,
 
                       // The filesystem's geometry, valid once start is high.
                       input  wire        start,
+                      input  wire        idle,       // the drive is idle
                       input  wire [31:0] root_clus,
                       input  wire [31:0] fat_start,
                       input  wire [31:0] data_start,
@@ -65,7 +80,7 @@ module fw_update #(
                       input  wire [7:0]  sd_buf_wdata,
                       input  wire [9:0]  sd_buf_addr,
 
-                      output reg         active,     // we have the drive
+                      output reg         running,    // an update is under way
                       output reg         reboot,     // pull PROGRAMN low
                       output reg  [3:0]  err,
                       output reg  [15:0] progress,   // payload sectors done
@@ -73,6 +88,15 @@ module fw_update #(
                       output reg  [1:0]  phase,      // 0 idle, 1 check, 2 write, 3 done
                       output reg  [31:0] file_build,
                       output wire [4:0]  dbg_state,
+
+                      // The two slots' versions, seven ASCII characters
+                      // from the top byte down, $00 padded; "EMPTY" for an
+                      // erased slot, "UNKNOWN" for one with no version.
+                      output reg  [55:0] pri_ver,
+                      output reg  [55:0] gld_ver,
+                      // where we were loaded from: "P", "G", or "J" for
+                      // neither (a JTAG load); $00 until the headers are read
+                      output reg  [7:0]  run_slot,
 
                       output wire        flash_csn,
                       output wire        flash_sck,
@@ -105,7 +129,8 @@ module fw_update #(
                    S_P2      = 5'd13, S_ERASE_W = 5'd14, S_NEXT    = 5'd15,
                    S_P2_PROG = 5'd16, S_PROG_W  = 5'd17, S_VER_W   = 5'd18,
                    S_DONE    = 5'd19, S_REBOOT  = 5'd20,
-                   S_FAIL    = 5'd21, S_QUIET   = 5'd22;
+                   S_FAIL    = 5'd21, S_QUIET   = 5'd22,
+                   S_PROBE   = 5'd23, S_PROBE_W = 5'd24;
 
    reg [4:0] st, ret, fat_ret;
    assign dbg_state = st;
@@ -163,6 +188,35 @@ module fw_update #(
 
    wire [8:0] spc = 9'd1 << spc_log;
 
+   // ---- the version headers -------------------------------------------------
+   // What a slot's header has to start with, and our BUILD_ID as the eight
+   // hex digits it appears as there.
+   function [7:0] hex_digit(input [3:0] n);
+      hex_digit = (n < 4'd10) ? "0" + n : "A" + n - 4'd10;
+   endfunction
+
+   function [7:0] want_byte(input [4:0] i);
+      case (i)
+        5'd0:  want_byte = 8'hFF;
+        5'd1:  want_byte = 8'h00;
+        5'd2:  want_byte = "P";
+        5'd3:  want_byte = "E";
+        5'd4:  want_byte = "V";
+        5'd5:  want_byte = ":";
+        5'd14: want_byte = ":";
+        default: want_byte = hex_digit(BUILD_ID[31 - 4*(i - 5'd6) -: 4]);
+      endcase
+   endfunction
+
+   reg        pr_slot;        // 0 the primary, 1 the golden copy
+   reg        pr_again;       // a re-read after the write: back to S_DONE
+   reg [4:0]  pr_i;           // header byte index
+   reg        pr_hdr, pr_ours, pr_empty, pr_end;
+   reg [55:0] pr_ver;
+   wire [55:0] pr_result = pr_hdr   ? (pr_ver == 56'd0 ? {"?", 48'd0} : pr_ver)
+               : pr_empty ? {"EMPTY", 16'd0}
+               : "UNKNOWN";
+
    // ---- state ---------------------------------------------------------------
    reg [31:0] cur_clus;        // the file cursor: this cluster...
    reg [8:0]  sec;             // ...and this sector of it
@@ -185,12 +239,51 @@ module fw_update #(
       jq     <= ra;
       scan_v <= 1'b0;
       if (rst) begin
-         st <= S_IDLE; req <= 1'b0; active <= 1'b0; reboot <= 1'b0;
+         st <= S_PROBE; req <= 1'b0; running <= 1'b0; reboot <= 1'b0;
          err <= E_NONE; progress <= 16'd0; total <= 16'd0; phase <= 2'd0;
          started <= 1'b0; file_build <= 32'd0; ra <= 9'd0; j <= 10'd0;
+         pr_slot <= 1'b0; pr_again <= 1'b0; run_slot <= 8'h00;
+         pri_ver <= 56'd0; gld_ver <= 56'd0;
       end else begin
          case (st)
-           S_IDLE: if (start && !started) begin
+           // ---- read a slot's version header --------------------------------
+           S_PROBE: begin
+              f_op <= OP_READ; f_addr <= (pr_slot ? GOLDEN_ADDR : 24'd0) + 24'h100;
+              f_len <= 10'd24; f_go <= 1'b1;
+              pr_i <= 5'd0; pr_hdr <= 1'b1; pr_ours <= 1'b1; pr_empty <= 1'b1;
+              pr_end <= 1'b0; pr_ver <= 56'd0;
+              st <= S_PROBE_W;
+           end
+           S_PROBE_W: begin
+              if (f_rd_stb) begin
+                 pr_i <= pr_i + 1'b1;
+                 if (pr_i < 5'd2 && f_rdata != 8'hFF) pr_empty <= 1'b0;
+                 if (pr_i < 5'd6 || pr_i == 5'd14) begin
+                    if (f_rdata != want_byte(pr_i)) pr_hdr <= 1'b0;
+                 end else if (pr_i < 5'd14) begin
+                    if (f_rdata != want_byte(pr_i)) pr_ours <= 1'b0;
+                 end else if (pr_i < 5'd22) begin
+                    // the version, up to seven characters, ended by $00
+                    if (f_rdata == 8'h00) pr_end <= 1'b1;
+                    else if (!pr_end) pr_ver[55 - 8*(pr_i - 5'd15) -: 8] <= f_rdata;
+                 end
+              end
+              if (f_done) begin
+                 if (!pr_slot) pri_ver <= pr_result;
+                 else          gld_ver <= pr_result;
+                 if (pr_again) begin
+                    st <= S_DONE;
+                 end else if (!pr_slot) begin
+                    if (pr_hdr && pr_ours) run_slot <= "P";
+                    pr_slot <= 1'b1; st <= S_PROBE;
+                 end else begin
+                    if (run_slot == 8'h00) run_slot <= (pr_hdr && pr_ours) ? "G" : "J";
+                    st <= S_IDLE;
+                 end
+              end
+           end
+
+           S_IDLE: if (start && idle && !started) begin
               started  <= 1'b1;
               cur_clus <= root_clus; sec <= 9'd0; found <= 1'b0;
               lba <= clus_lba(root_clus); ret <= S_DIR; st <= S_RD;
@@ -316,7 +409,7 @@ module fw_update #(
               end else if (file_build == BUILD_ID) begin
                  st <= S_QUIET;                       // already running it
               end else begin
-                 active <= 1'b1; phase <= 2'd1;
+                 running <= 1'b1; phase <= 2'd1;
                  total <= hdr_len[24:9]; k <= 16'd0; progress <= 16'd0;
                  crc <= 32'hFFFFFFFF;
                  st <= S_P1;
@@ -365,7 +458,9 @@ module fw_update #(
            // ---- pass 2: erase, program and verify, a sector at a time -------
            S_P2: begin
               if (k == total) begin
-                 phase <= 2'd3; wait_cnt <= 32'd0; st <= S_DONE;
+                 // read the new primary's version, then wait for the reboot
+                 phase <= 2'd3; wait_cnt <= 32'd0;
+                 pr_slot <= 1'b0; pr_again <= 1'b1; st <= S_PROBE;
               end else if (k[6:0] == 7'd0) begin
                  // the first sector of a 64 KB block erases the block
                  f_op <= OP_ERASE; f_addr <= {k[14:7], 16'd0}; f_go <= 1'b1;
@@ -421,13 +516,14 @@ module fw_update #(
               end
            end
 
+           // Any host activity starts the count over.
            S_DONE: begin
-              wait_cnt <= wait_cnt + 1'b1;
-              if (wait_cnt >= REBOOT_DELAY) begin reboot <= 1'b1; st <= S_REBOOT; end
+              wait_cnt <= idle ? wait_cnt + 1'b1 : 32'd0;
+              if (wait_cnt >= REBOOT_HOLD) begin reboot <= 1'b1; st <= S_REBOOT; end
            end
            S_REBOOT: reboot <= 1'b1;                  // held until PROGRAMN takes us down
 
-           S_FAIL:  begin req <= 1'b0; active <= 1'b0; end
+           S_FAIL:  begin req <= 1'b0; running <= 1'b0; end
            S_QUIET: req <= 1'b0;
            default: st <= S_IDLE;
          endcase

@@ -171,25 +171,69 @@ image padded to whole sectors. The header holds `PEFW`, the board (`R2`), the
 payload's length, its CRC-32 and its `BUILD_ID`. Put it in the root of the
 card.
 
+### Versions
+
+`fpga/VERSION` holds the release version, up to seven characters of `0-9`,
+`A-Z`, `.` and `-`. Bump it for every build that goes out. The build puts it
+in two places: in the gateware, as the `VERSION` parameter, and in the
+bitstream's header as a comment, `PEV:<BUILD_ID>:<VERSION>`, ahead of
+nextpnr's own. The header comes right after a slot's 256 bytes of $FF, so the
+comment always starts 258 bytes into the slot.
+
+At reset, before anything else, the updater reads both slots' headers. That
+takes about 40 microseconds and doesn't touch the SD card. Whichever slot
+carries the running `BUILD_ID` is the one we were loaded from. If neither
+does, the gateware came in over JTAG. A slot can also read `EMPTY` (erased),
+or `UNKNOWN` (written before versions existed, like the golden copy on a
+board flashed before this). After an update writes the primary, it reads the
+primary's header again, so the menu shows what's waiting for the reboot.
+
+The select menu shows all of it, from the info block (`selector/SELECTOR.md`
+has the layout):
+
+    VERSION 1.0 (PRIMARY)            row 2: what's running, and its slot
+    PRIMARY 1.0  GOLDEN 1.0          bottom row: what each slot holds
+
+The ULX3S shows only the first line, without a slot. The Teensy shows neither.
+
+Whether the primary matches is all the slot test checks. If the primary's
+header survives but the rest of it is damaged, the ECP5 loads the golden
+copy instead, and if the two copies are the same build, the menu still says
+`PRIMARY`. In that case it's the same gateware either way.
+
 ### What happens at power-up
 
-Once the filesystem is up, the updater looks for `R2UPDATE.BIN` in the root.
-It stops there, and the drive carries on as normal, if:
+Boot time comes first, so the updater does nothing until the drive is idle:
+a full second with no host command, no block reads or writes, and the SD
+card at rest. A booting //e reads with gaps of a few milliseconds, so the
+updater never touches the card during a boot. Then it looks for
+`R2UPDATE.BIN` in the root, which takes a few sector reads. It stops there
+if:
 
 - there's no file
 - the file's `BUILD_ID` is the one that's running, which is what keeps an
   update from repeating, so the file can stay on the card
 
-Otherwise it takes the drive (the //e sees no drive while this runs) and
-makes two passes. The first reads the whole file and checks its CRC, and
+Otherwise it makes two passes, in the background. The drive keeps serving
+the whole time: the updater is the SD card's lowest-priority user, so a host
+read waits at most for the one updater read already in flight (well under a
+millisecond). The first pass reads the whole file and checks its CRC, and
 writes nothing. The second erases each 64 KB block as it reaches it,
-programs each sector, and reads it back. Then it pulls PROGRAMN, and the
-board comes up running the new image. An update of the current 371 KB image
-reads the card twice and writes about 6 blocks, which takes a few seconds.
+programs each sector, and reads it back. An update of the current 371 KB
+image reads the card twice and writes about 6 blocks, which takes a few
+seconds.
+
+Then it waits for the drive to be idle again, and to stay idle for four
+more seconds (five in all), before it pulls PROGRAMN. That reboot is the
+only part a host can notice: the drive is gone while the FPGA configures and
+mounts the card again, the same wait as at power-up. If the //e is in the middle of something
+then, it gets an error. If the host never goes quiet for five seconds, the
+board keeps running the old image, and the new one starts at the next
+power-up.
 
 The LEDs show it. During the first pass they fill from D1 to D8, blinking.
-During the second they fill again, solid. All eight light just before the
-reboot. A failure blinks D8 and shows the error code on D1 to D4 (D1 is bit
+During the second they fill again, solid. All eight stay lit while it waits
+to reboot. A failure blinks D8 and shows the error code on D1 to D4 (D1 is bit
 0), until a host appears:
 
 | code | meaning |
@@ -204,8 +248,7 @@ reboot. A failure blinks D8 and shows the error code on D1 to D4 (D1 is bit
 | 8 | a page program timed out |
 | 9 | a sector read back differently |
 
-Errors 2 to 6 happen before anything is written, and so can error 1, and
-then the drive goes back to serving. Errors 7 to 9, and an error 1 during
+Errors 2 to 6 happen before anything is written, and so can error 1. Errors 7 to 9, and an error 1 during
 the second pass, leave the primary half written. The running image is
 fine until power is removed, and at the next power-up the board falls back
 to the golden copy, which tries again.
@@ -220,6 +263,8 @@ flash. A good file is written and read back, with its directory entry and
 its clusters both scattered so the FAT has to be followed. A file that's
 already running, corrupted, built for another board, missing, or that reads
 back wrong is refused. Nothing at or above the golden image is ever written.
+It doesn't start until the drive is idle, and host activity holds the reboot
+off until the drive has been idle long enough.
 
 **None of this has run on a board yet.** The simulation covers the updater's
 own logic. It can't show that the ECP5 really falls back to the golden copy,

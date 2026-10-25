@@ -19,6 +19,9 @@
 //   4. a file for another board: refused, flash untouched
 //   5. no file at all: nothing happens
 //   6. a flash that drops a bit: refused on verify
+//   7. a good file, but the drive never goes idle: nothing starts
+//   8. host activity after the write holds the reboot off
+//   9. the version headers: which slot we came from, EMPTY and UNKNOWN
 
 `default_nettype none
 
@@ -26,6 +29,7 @@ module tb_fw_update;
 
    localparam [31:0] RUNNING = 32'h10250900;   // the BUILD_ID we "are"
    localparam [31:0] NEWER   = 32'h10251200;   // the file's BUILD_ID
+   localparam [31:0] OTHER   = 32'h09010000;   // some other build
    localparam integer PAYLOAD_SECTORS = 6;
    localparam integer FLASH_BYTES = 262144;
    localparam [23:0] GOLDEN = 24'h020000;
@@ -82,8 +86,28 @@ module tb_fw_update;
       end
    endfunction
 
+   // A bitstream's version header, as the Makefile writes it, 256 bytes
+   // into a slot: $FF $00 "PEV:<build>:<version>" $00
+   function [7:0] hex_digit(input [3:0] n);
+      hex_digit = (n < 10) ? "0" + n : "A" + n - 10;
+   endfunction
+
+   function [7:0] header_byte(input integer i, input [31:0] build, input [23:0] ver);
+      begin
+         if (i == 0)       header_byte = 8'hFF;
+         else if (i == 1)  header_byte = 8'h00;
+         else if (i < 6)   header_byte = "PEV:" >> (8 * (5 - i));
+         else if (i < 14)  header_byte = hex_digit(build[31 - 4*(i-6) -: 4]);
+         else if (i == 14) header_byte = ":";
+         else if (i < 18)  header_byte = ver[23 - 8*(i-15) -: 8];
+         else              header_byte = 8'h00;
+      end
+   endfunction
+
+   // the new image carries version 2.0 in its header
    function [7:0] payload(input integer at);
-      payload = (at * 7 + (at >> 9) * 13 + 8'h5A) & 8'hFF;
+      if (at >= 256 && at < 256 + 24) payload = header_byte(at - 256, NEWER, "2.0");
+      else payload = (at * 7 + (at >> 9) * 13 + 8'h5A) & 8'hFF;
    endfunction
 
    reg [31:0] good_crc;
@@ -169,28 +193,58 @@ module tb_fw_update;
    flash_model #(.BYTES(FLASH_BYTES), .GOLDEN(GOLDEN)) u_fm (
                                                              .csn(flash_csn), .sck(flash_sck), .mosi(flash_mosi), .miso(flash_miso));
 
+   // What the flash holds before each case. A slot is one of:
+   //   0  version 1.0, our own BUILD_ID       1  version 0.9, another build
+   //   2  no version header (an old image)    3  erased
+   task slot_setup(input [23:0] base, input integer kind);
+      integer n;
+      begin
+         if (kind == 0)
+           for (n = 0; n < 24; n = n + 1)
+             u_fm.mem[base + 256 + n] = header_byte(n, RUNNING, "1.0");
+         else if (kind == 1)
+           for (n = 0; n < 24; n = n + 1)
+             u_fm.mem[base + 256 + n] = header_byte(n, OTHER, "0.9");
+         else if (kind == 3)
+           for (n = 0; n < 512; n = n + 1) u_fm.mem[base + n] = 8'hFF;
+      end
+   endtask
+
+   task flash_setup(input integer pri, input integer gld);
+      begin
+         u_fm.fill_old();
+         slot_setup(24'd0, pri);
+         slot_setup(GOLDEN, gld);
+         u_fm.snap();
+      end
+   endtask
+
    // ---- the updater ---------------------------------------------------------
    reg         start = 0;
-   wire        active, reboot;
+   reg         idle = 1;
+   wire        running, reboot;
    wire [3:0]  err;
    wire [15:0] progress, total;
    wire [1:0]  phase;
    wire [31:0] file_build;
    wire [4:0]  dbg_state;
+   wire [55:0] pri_ver, gld_ver;
+   wire [7:0]  run_slot;
 
    fw_update #(.CLK_HZ(50_000_000), .BUILD_ID(RUNNING), .GOLDEN_ADDR(GOLDEN),
-               .REBOOT_DELAY(100)) dut (
-                                        .clk(clk), .rst(rst), .start(start),
-                                        .root_clus(32'd2), .fat_start(32'd100), .data_start(32'd200),
-                                        .spc_log(4'd2),
-                                        .req(req), .lba(lba), .fire(fire), .sd_done(sd_done), .sd_err(1'b0),
-                                        .sd_buf_we(sd_buf_we), .sd_buf_wdata(sd_buf_wdata),
-                                        .sd_buf_addr(sd_buf_addr),
-                                        .active(active), .reboot(reboot), .err(err),
-                                        .progress(progress), .total(total), .phase(phase),
-                                        .file_build(file_build), .dbg_state(dbg_state),
-                                        .flash_csn(flash_csn), .flash_sck(flash_sck),
-                                        .flash_mosi(flash_mosi), .flash_miso(flash_miso));
+               .REBOOT_HOLD(100)) dut (
+                                       .clk(clk), .rst(rst), .start(start), .idle(idle),
+                                       .root_clus(32'd2), .fat_start(32'd100), .data_start(32'd200),
+                                       .spc_log(4'd2),
+                                       .req(req), .lba(lba), .fire(fire), .sd_done(sd_done), .sd_err(1'b0),
+                                       .sd_buf_we(sd_buf_we), .sd_buf_wdata(sd_buf_wdata),
+                                       .sd_buf_addr(sd_buf_addr),
+                                       .running(running), .reboot(reboot), .err(err),
+                                       .progress(progress), .total(total), .phase(phase),
+                                       .file_build(file_build), .dbg_state(dbg_state),
+                                       .pri_ver(pri_ver), .gld_ver(gld_ver), .run_slot(run_slot),
+                                       .flash_csn(flash_csn), .flash_sck(flash_sck),
+                                       .flash_mosi(flash_mosi), .flash_miso(flash_miso));
 
    integer fails = 0;
    task check(input cond, input [511:0] what);
@@ -204,11 +258,11 @@ module tb_fw_update;
    endtask
 
    // run until the updater settles (or reboots), at most `limit` clocks
-   reg was_active;
+   reg was_running;
    task run_case(input integer limit);
       integer t;
       begin
-         rst = 1; start = 0; was_active = 0;
+         rst = 1; start = 0; was_running = 0;
          repeat (5) @(posedge clk);
          rst = 0;
          repeat (5) @(posedge clk);
@@ -217,9 +271,21 @@ module tb_fw_update;
          while (t < limit && !reboot
                 && !(dbg_state == 5'd21 || dbg_state == 5'd22)) begin   // S_FAIL, S_QUIET
             @(posedge clk);
-            if (active) was_active = 1;
+            if (running) was_running = 1;
             t = t + 1;
          end
+         repeat (5) @(posedge clk);
+      end
+   endtask
+
+   // reset, then wait for the header reads to finish (S_IDLE)
+   task probe_only;
+      begin
+         rst = 1; start = 0;
+         repeat (5) @(posedge clk);
+         rst = 0;
+         repeat (5) @(posedge clk);
+         while (dbg_state != 5'd0) @(posedge clk);
          repeat (5) @(posedge clk);
       end
    endtask
@@ -238,16 +304,16 @@ module tb_fw_update;
       begin
          flash_untouched = 1;
          for (n = 0; n < 512*PAYLOAD_SECTORS; n = n + 1)
-           if (u_fm.mem[n] !== 8'hC3) flash_untouched = 0;
+           if (u_fm.mem[n] !== u_fm.orig[n]) flash_untouched = 0;
       end
    endfunction
 
    initial begin
       $display("-- 1. a good update file");
       build_card(1, "R2  ", 0);
-      u_fm.fill_old();
+      flash_setup(0, 1);
       run_case(5_000_000);
-      check(was_active, "took the drive while updating");
+      check(was_running, "ran the update");
       check(err == 4'd0, "no error");
       check(total == PAYLOAD_SECTORS, "six payload sectors");
       check(flash_matches(0), "the primary holds the payload");
@@ -255,44 +321,96 @@ module tb_fw_update;
       check(u_fm.over_golden == 0, "nothing was written at or above the golden address");
       check(reboot, "reboot requested");
       check(file_build == NEWER, "read the file's BUILD_ID");
+      check(run_slot == "P", "running from the primary");
+      check(pri_ver == {"2.0", 32'd0}, "the primary reads as the new version");
+      check(gld_ver == {"0.9", 32'd0}, "the golden copy's version");
 
       $display("-- 2. the same file, already running it");
       put32(file_byte(0)+16, RUNNING);
-      u_fm.fill_old();
+      flash_setup(0, 1);
       run_case(5_000_000);
-      check(!was_active && !reboot && err == 4'd0, "nothing happens");
+      check(!was_running && !reboot && err == 4'd0, "nothing happens");
 
       $display("-- 3. a corrupted payload");
       build_card(1, "R2  ", 1);
-      u_fm.fill_old();
+      flash_setup(0, 1);
       run_case(5_000_000);
       check(err == 4'd4, "refused on CRC (E_CRC)");
       check(flash_untouched(0), "flash untouched");
-      check(!active && !reboot, "drive given back, no reboot");
+      check(!running && !reboot, "stopped, no reboot");
 
       $display("-- 4. a file for another board");
       build_card(1, "ULX3", 0);
-      u_fm.fill_old();
+      flash_setup(0, 1);
       run_case(5_000_000);
       check(err == 4'd3, "refused (E_BOARD)");
-      check(flash_untouched(0) && !was_active, "flash untouched, drive never taken");
+      check(flash_untouched(0) && !was_running, "flash untouched, never ran");
 
       $display("-- 5. no update file");
       build_card(0, "R2  ", 0);
-      u_fm.fill_old();
+      flash_setup(0, 1);
       run_case(5_000_000);
-      check(err == 4'd0 && !was_active && !reboot, "nothing happens");
+      check(err == 4'd0 && !was_running && !reboot, "nothing happens");
       check(dbg_state == 5'd22, "settles quietly");
 
       $display("-- 6. a flash that drops a bit");
       build_card(1, "R2  ", 0);
-      u_fm.fill_old();
+      flash_setup(0, 1);
       u_fm.stuck_bit = 1;
       run_case(5_000_000);
       u_fm.stuck_bit = 0;
       check(err == 4'd9, "refused on verify (E_VERIFY)");
-      check(!active && !reboot, "drive given back, no reboot");
+      check(!running && !reboot, "stopped, no reboot");
       check(u_fm.golden_ok(0), "the golden image is untouched");
+
+      $display("-- 7. a good file, but the drive never goes idle");
+      build_card(1, "R2  ", 0);
+      flash_setup(0, 1);
+      idle = 0;
+      run_case(200_000);
+      check(dbg_state == 5'd0 && !req, "waits without touching the card");
+      check(flash_untouched(0) && !reboot, "flash untouched, no reboot");
+
+      $display("-- 8. the host gets busy after the write");
+      // Start it with idle high, then drop idle for the rest of the
+      // write and hold the reboot off with short idle spells.
+      rst = 1; start = 0;
+      repeat (5) @(posedge clk);
+      rst = 0; start = 1; idle = 1;
+      // past the header reads (S_PROBE, S_PROBE_W) and out of S_IDLE
+      while (dbg_state == 5'd0 || dbg_state == 5'd23 || dbg_state == 5'd24) @(posedge clk);
+      idle = 0;
+      // until S_DONE or S_FAIL
+      while (dbg_state != 5'd19 && dbg_state != 5'd21) @(posedge clk);
+      repeat (1000) @(posedge clk);
+      check(flash_matches(0) && !reboot, "written in the background, no reboot while busy");
+      idle = 1;
+      repeat (50) @(posedge clk);
+      idle = 0;
+      repeat (1000) @(posedge clk);
+      check(!reboot, "a short idle spell does not reboot");
+      idle = 1;
+      repeat (200) @(posedge clk);
+      check(reboot, "reboots once idle lasts");
+
+      $display("-- 9. the version headers");
+      idle = 0;   // so nothing starts
+      flash_setup(0, 1);
+      probe_only;
+      check(run_slot == "P" && pri_ver == {"1.0", 32'd0} && gld_ver == {"0.9", 32'd0},
+            "ours in the primary: P, 1.0, 0.9");
+      flash_setup(1, 0);
+      probe_only;
+      check(run_slot == "G" && pri_ver == {"0.9", 32'd0} && gld_ver == {"1.0", 32'd0},
+            "ours in the golden copy: G");
+      flash_setup(1, 1);
+      probe_only;
+      check(run_slot == "J", "ours in neither: J (a JTAG load)");
+      flash_setup(3, 2);
+      probe_only;
+      check(pri_ver == {"EMPTY", 16'd0} && gld_ver == "UNKNOWN" && run_slot == "J",
+            "an erased primary and an unversioned golden copy");
+      check(u_fm.writes == 0, "reading the headers writes nothing");
 
       $display("");
       if (fails == 0) $display("PASS: the updater writes only good files, only below the golden image");
@@ -318,21 +436,29 @@ module flash_model #(parameter integer BYTES = 262144,
                                                             output reg  miso
                                                             );
    reg [7:0] mem [0:BYTES-1];
+   reg [7:0] orig [0:BYTES-1];  // the contents before the case
    reg [7:0] cmd, sr, outb;
    reg [23:0] a;
-   integer    nbit, nbyte, over_golden, busy_until, stuck_bit;
+   integer    nbit, nbyte, over_golden, busy_until, stuck_bit, writes;
    reg        wel, busy;
    reg [7:0]  inb;
 
    initial begin
-      miso = 1'b1; wel = 0; busy = 0; over_golden = 0; stuck_bit = 0;
+      miso = 1'b1; wel = 0; busy = 0; over_golden = 0; stuck_bit = 0; writes = 0;
    end
 
    task fill_old;
       integer n;
       begin
          for (n = 0; n < BYTES; n = n + 1) mem[n] = (n >= GOLDEN) ? 8'h60 + (n & 15) : 8'hC3;
-         over_golden = 0;
+         over_golden = 0; writes = 0;
+      end
+   endtask
+
+   task snap;
+      integer n;
+      begin
+         for (n = 0; n < BYTES; n = n + 1) orig[n] = mem[n];
       end
    endtask
 
@@ -341,7 +467,7 @@ module flash_model #(parameter integer BYTES = 262144,
       begin
          golden_ok = 1;
          for (n = GOLDEN; n < BYTES; n = n + 1)
-           if (mem[n] !== (8'h60 + (n & 15))) golden_ok = 0;
+           if (mem[n] !== orig[n]) golden_ok = 0;
       end
    endfunction
 
@@ -350,7 +476,7 @@ module flash_model #(parameter integer BYTES = 262144,
    always @(posedge csn) begin
       if (cmd == 8'h06) wel = 1;
       if ((cmd == 8'hD8 || cmd == 8'h02) && wel) begin
-         wel = 0; busy = 1;
+         wel = 0; busy = 1; writes = writes + 1;
          #3000 busy = 0;
       end
    end

@@ -17,8 +17,9 @@
 //     multi-op sequences tolerate interleaving by design (each req is
 //     self-contained).
 //   - The firmware updater is last: it only fires when neither the
-//     router nor fat32 wants the engine. It looks for its file while a
-//     host may already be talking, so it must never delay a host read.
+//     router nor fat32 wants the engine. It runs in the background
+//     while a host may be talking, so a waiting host read always goes
+//     first; at worst it waits out the one updater read in flight.
 //   - sd_done and sd_err are routed to the OWNER of the in-flight op
 //     only.
 //   - The owner flag keys the write-data source and buffer-write

@@ -7,8 +7,8 @@
 //
 // Checked, in the order the //e does it:
 //
-//   1. the info block ($FFFFC0) carries the $A5 signature, the image count and
-//      the force-menu bit,
+//   1. the info block ($FFFFC0) carries the $A5 signature, the image count,
+//      the force-menu bit and the three versions,
 //   2. the selector body ($FFFF40 + p) matches the blob byte for byte,
 //   3. block 0 is the synthetic loader while armed and belongs to nobody once a
 //      selection has been made,
@@ -42,6 +42,8 @@ module tb_selector;
                  .img_count(img_count), .img_current(img_current),
                  .force_menu(force_menu), .armed(armed), .window_live(1'b1),
                  .boot_hit(),
+                 .version({32'd0, "1.0"}), .pri_ver({"1.1", 32'd0}), .gld_ver("UNKNOWN"),
+                 .run_slot("G"),
                  .cat_addr(cat_addr), .cat_data(8'hCC),
                  .sel_idx(sel_idx), .sel_stb(sel_stb), .hit(hit), .rdata(rdata));
 
@@ -72,6 +74,10 @@ module tb_selector;
 
    reg [7:0] b;
    integer i, bad;
+   // the versions as the info block should carry them, written out
+   reg [55:0] want_run = {8'h00, 8'h00, 8'h00, 8'h00, "1", ".", "0"};
+   reg [55:0] want_pri = {"1", ".", "1", 8'h00, 8'h00, 8'h00, 8'h00};
+   reg [55:0] want_gld = {"U", "N", "K", "N", "O", "W", "N"};
 
    initial begin
       @(posedge clk);
@@ -88,6 +94,15 @@ module tb_selector;
       force_menu = 1'b0;
       fetch(24'hFFFFC0, 10'd5, b); check(b[0] === 1'b0, "and clears when a choice is valid");
       force_menu = 1'b1;
+      bad = 0;
+      for (i = 0; i < 7; i = i + 1) begin
+         fetch(24'hFFFFC0, 10'd16 + i, b); if (b !== want_run[55 - 8*i -: 8]) bad = bad + 1;
+         fetch(24'hFFFFC0, 10'd32 + i, b); if (b !== want_pri[55 - 8*i -: 8]) bad = bad + 1;
+         fetch(24'hFFFFC0, 10'd40 + i, b); if (b !== want_gld[55 - 8*i -: 8]) bad = bad + 1;
+      end
+      check(bad == 0, "bytes 16, 32 and 40 are the running, primary and golden versions");
+      fetch(24'hFFFFC0, 10'd23, b); check(b === 8'h00, "byte 23 ends the running version");
+      fetch(24'hFFFFC0, 10'd24, b); check(b === "G", "byte 24 is the slot we came from");
 
       $display("-- the selector body, $FFFF40 + p");
       bad = 0;

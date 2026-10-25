@@ -114,6 +114,9 @@ module top #(
              // word 2, so the running firmware identifies itself. 0 = a build
              // that bypassed the flow.
              parameter [31:0]  BUILD_ID = 32'h0,
+             // The release version, up to seven characters, from the VERSION
+             // file (chparam again). The select menu shows it.
+             parameter [55:0]  VERSION  = "DEV",
              // The system clock this build actually runs at. 50 MHz is the
              // design point. Every protocol constant is in clock cycles, so a
              // different CLK_HZ stretches them in real time. Blocks that need
@@ -507,16 +510,18 @@ module top #(
    // wiring reads unchanged.
    wire             fs_fire, sd_own_fs;
    wire             r_fire_rd, r_fire_wr, r_done, r_err, f_done, f_err;
-   // The firmware updater is the arbiter's third master. upd_active means it
-   // has taken the drive: the protocol target is held in reset until the
-   // reboot, or until a failure hands the drive back.
+   // The firmware updater is the arbiter's third master, below the other
+   // two, so it never delays the drive. upd_running means an update is
+   // under way; the drive keeps serving through it.
    wire             up_req, up_fire, up_done, up_err, sd_own_up;
    wire [31:0]      up_lba;
-   wire             upd_active;
+   wire             upd_running;
    wire [3:0]       upd_err;
    wire [15:0]      upd_progress, upd_total;
    wire [1:0]       upd_phase;
    wire [31:0]      upd_build;
+   wire [55:0]      upd_pri_ver, upd_gld_ver;
+   wire [7:0]       upd_run_slot;
    wire [31:0]      fs_root_clus;
    // (the sd_arb instance lives below, after sd_rd/sd_wr are declared)
    wire [7:0]       sd_retries;
@@ -613,7 +618,7 @@ module top #(
    // drive that does not answer. The block buffer and the resolved image
    // survive.
    wire       pres_rst = 1'b0;   // see HONOR_PRES_TGT
-   wire       tgt_rst = rst | pres_rst | EXERCISE_ENABLE | STREAM_ENABLE | upd_active;
+   wire       tgt_rst = rst | pres_rst | EXERCISE_ENABLE | STREAM_ENABLE;
 
    profile_target u_target (
                             .clk(clk_sys), .rst(tgt_rst), .dbg_frame(dbg_frame), .dbg_walk(dbg_walk), .dbg_badframe(dbg_badframe),
@@ -1552,6 +1557,8 @@ module top #(
                          .armed(sel_armed && sel_want && (prev_blk == 24'hFFFFFF)),
                          .window_live(window_live),
                          .cat_addr(sel_cat_addr), .cat_data(fs_cat_data),
+                         .version(VERSION), .pri_ver(upd_pri_ver), .gld_ver(upd_gld_ver),
+                         .run_slot(upd_run_slot),
                          .sel_idx(sel_idx), .sel_stb(sel_stb),
                          .hit(sel_hit), .boot_hit(sel_boot_hit), .rdata(sel_data));
       end else begin : g_no_sel
@@ -1729,30 +1736,47 @@ module top #(
    always @(posedge clk_sys) if (rst) hb <= 0; else hb <= hb + 1'b1;
 
    // ---- firmware update from the SD card (r2) -------------------------------
-   // It starts once the filesystem has read the card's geometry. An MBR,
-   // BPB or SD failure means there is no geometry to trust, and it never
-   // starts. The flash clock goes out through USRMCLK, since that pin is the
-   // configuration clock. PROGRAMN is pulled through R48 open drain: low or
-   // released, never driven high (a programmer or SW1 holding PROGRAMN low
-   // would otherwise sink current through R48), and held low long enough
-   // for C37 to discharge. Holding it until we go down covers that.
+   // It starts once the filesystem has read the card's geometry and the
+   // drive is idle (below). An MBR, BPB or SD failure means there is no
+   // geometry to trust, and it never starts. The flash clock goes out
+   // through USRMCLK, since that pin is the configuration clock. PROGRAMN
+   // is pulled through R48 open drain: low or released, never driven high
+   // (a programmer or SW1 holding PROGRAMN low would otherwise sink current
+   // through R48), and held low long enough for C37 to discharge. Holding
+   // it until we go down covers that.
    wire fs_geom_ok = fs_ready && fs_err != 4'd1 && fs_err != 4'd2 && fs_err != 4'd6;
+
+   // Idle: a second with no host command, no block traffic, nothing waiting
+   // on the SD card and the SD engine at rest. The updater waits for it
+   // before it reads anything, so a booting //e (which reads with
+   // millisecond gaps) never shares the card with it, and it waits for
+   // idle again before the reboot. A persist waiting on host_quiet fires
+   // after a quarter second, so it is never cut off by a reboot.
+   reg [31:0] upd_quiet = 32'd0;
+   wire       upd_idle = (upd_quiet >= CLK_HZ);
+   always @(posedge clk_sys) begin
+      if (rst || cmd_s[1] || blk_rd || blk_wr || fs_req || sd_dbg != SD_S_READY)
+        upd_quiet <= 32'd0;
+      else if (!upd_idle)
+        upd_quiet <= upd_quiet + 32'd1;
+   end
 
    generate if (UPDATE_ENABLE && FS_ENABLE && FAMILY == "ECP5") begin : g_update
       wire up_sck, up_reboot;
 
       fw_update #(.CLK_HZ(CLK_HZ), .BUILD_ID(BUILD_ID), .BOARD(UPDATE_BOARD),
                   .NAME(UPDATE_NAME), .GOLDEN_ADDR(UPDATE_GOLDEN)) u_upd (
-                                                                          .clk(clk_sys), .rst(rst), .start(fs_geom_ok),
+                                                                          .clk(clk_sys), .rst(rst), .start(fs_geom_ok), .idle(upd_idle),
                                                                           .root_clus(fs_root_clus), .fat_start(fs_dbg_fat_start),
                                                                           .data_start(fs_data_start), .spc_log(fs_spc_log),
                                                                           .req(up_req), .lba(up_lba), .fire(up_fire),
                                                                           .sd_done(up_done), .sd_err(up_err),
                                                                           .sd_buf_we(sd_buf_we && sd_own_up), .sd_buf_wdata(sd_buf_wdata),
                                                                           .sd_buf_addr(sd_buf_addr),
-                                                                          .active(upd_active), .reboot(up_reboot), .err(upd_err),
+                                                                          .running(upd_running), .reboot(up_reboot), .err(upd_err),
                                                                           .progress(upd_progress), .total(upd_total), .phase(upd_phase),
                                                                           .file_build(upd_build), .dbg_state(),
+                                                                          .pri_ver(upd_pri_ver), .gld_ver(upd_gld_ver), .run_slot(upd_run_slot),
                                                                           .flash_csn(flash_csn), .flash_sck(up_sck),
                                                                           .flash_mosi(flash_mosi), .flash_miso(flash_miso));
 
@@ -1761,15 +1785,17 @@ module top #(
       TRELLIS_IO #(.DIR("BIDIR")) u_reboot (.B(fpga_reboot), .I(1'b0), .T(~up_reboot), .O());
    end else begin : g_no_update
       assign up_req = 1'b0;        assign up_lba = 32'd0;
-      assign upd_active = 1'b0;    assign upd_err = 4'd0;
+      assign upd_running = 1'b0;   assign upd_err = 4'd0;
       assign upd_progress = 16'd0; assign upd_total = 16'd0;
       assign upd_phase = 2'd0;     assign upd_build = 32'd0;
+      assign upd_pri_ver = 56'd0;  assign upd_gld_ver = 56'd0;
+      assign upd_run_slot = 8'h00;   // no slots: the menu shows VERSION only
       assign flash_csn = 1'b1;     assign flash_mosi = 1'b0;
    end endgenerate
 
    // While an update runs, the LEDs fill from D1 to D8 as it goes: blinking
    // during the first pass (reading and checking the file), solid during the
-   // second (writing the flash). All eight light just before the reboot. A
+   // second (writing the flash). All eight light while it waits to reboot. A
    // failure blinks D8 with the error code on D1 to D4, until a host
    // appears.
    wire [7:0] upd_bar;
@@ -1777,7 +1803,7 @@ module top #(
    for (bi = 0; bi < 8; bi = bi + 1) begin : g_bar
       assign upd_bar[bi] = ({upd_progress, 3'b000} >= upd_total * (bi + 1));
    end
-   wire       upd_show = upd_active || (upd_err != 4'd0 && !host_seen);
+   wire       upd_show = upd_running || (upd_err != 4'd0 && !host_seen);
    wire [7:0] led_upd  = (upd_err != 4'd0)  ? {hb[23], 3'b000, upd_err}
               : (upd_phase == 2'd3) ? 8'hFF
               : (upd_phase == 2'd1) ? (hb[22] ? upd_bar : 8'h00)

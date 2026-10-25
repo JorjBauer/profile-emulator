@@ -55,6 +55,13 @@ module selector #(
                      // this is low.
                      input  wire        window_live,
 
+                     // versions for the info block: ours, and the two flash
+                     // slots' with the one we came from (see fw_update.v)
+                     input  wire [55:0] version,
+                     input  wire [55:0] pri_ver,
+                     input  wire [55:0] gld_ver,
+                     input  wire [7:0]  run_slot,
+
                      // catalog RAM, filled by the scanner
                      output wire [11:0] cat_addr,
                      input  wire [7:0]  cat_data,
@@ -126,17 +133,24 @@ module selector #(
    // ---- the info block -----------------------------------------------------
    // Layout from SELECTOR.md. $A5 is how the 6502 side tells it is talking to
    // an emulator at all, and bit 0 of byte 5 is what makes the menu appear
-   // whether or not open-apple is held.
+   // whether or not open-apple is held. The version fields are seven bytes
+   // of ASCII each, and the menu skips any $00 in them, so a short string
+   // can be padded at either end.
    function [7:0] info_byte(input [9:0] a);
-      case (a)
-        10'd0: info_byte = img_count;
-        10'd1: info_byte = img_current;
-        10'd2: info_byte = 8'd8;                 // catalog pages
-        10'd3: info_byte = 8'd4;                 // body pages
-        10'd4: info_byte = 8'hA5;
-        10'd5: info_byte = {7'b0, force_menu};
-        default: info_byte = 8'h00;
-      endcase
+      if (a >= 10'd16 && a <= 10'd22)      info_byte = version[55 - 8*(a - 10'd16) -: 8];
+      else if (a >= 10'd32 && a <= 10'd38) info_byte = pri_ver[55 - 8*(a - 10'd32) -: 8];
+      else if (a >= 10'd40 && a <= 10'd46) info_byte = gld_ver[55 - 8*(a - 10'd40) -: 8];
+      else
+        case (a)
+          10'd0:  info_byte = img_count;
+          10'd1:  info_byte = img_current;
+          10'd2:  info_byte = 8'd8;              // catalog pages
+          10'd3:  info_byte = 8'd4;              // body pages
+          10'd4:  info_byte = 8'hA5;
+          10'd5:  info_byte = {7'b0, force_menu};
+          10'd24: info_byte = run_slot;
+          default: info_byte = 8'h00;
+        endcase
    endfunction
 
    reg [7:0] boot_q, body_q;

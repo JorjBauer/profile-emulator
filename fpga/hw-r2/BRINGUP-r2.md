@@ -236,6 +236,11 @@ fitted the LEDs:
 If you fitted J5 too, a 3.3 V serial adapter on it (pin 1 GND, pin 2 TX,
 pin 3 RX, 115200 8N1) shows the drive's report, starting with its build ID.
 
+On the //e, hold open-apple while it boots to bring up the image menu. It
+should say `VERSION` with the number in `fpga/VERSION` and `(PRIMARY)`, and
+the bottom row should show that same version for both `PRIMARY` and
+`GOLDEN`.
+
 ### Programming the flash through J6 instead
 
 You don't need this, since JTAG can write the flash. J6 is there in case
