@@ -29,12 +29,11 @@ module top #(
              // the spec allows: the limit is the wiring, not the card. It can
              // be raised on a board that is shown to run at the higher rate.
              parameter integer SD_DIV_INIT = 250,
-             // The ceiling is DIV=2, 8.33 MHz: the sweep's indices 0..5 return
-             // correct data and 6 and 7 do not. That is 492 us for a 512-byte
-             // block against the //e's ~6.6 ms. The card is thirteen times
-             // faster than the bus can consume it, so there is nothing to gain
-             // by pushing further. 8.33 MHz is the ceiling: the on-board sweep
-             // verifies a known sector's checksum at each rate and finds 99.6k,
+             // The ceiling is DIV=2, 8.33 MHz, measured on the ULX3S harness.
+             // That is 492 us for a 512-byte block against the //e's ~6.6 ms.
+             // The card is thirteen times faster than the bus can consume it,
+             // so there is nothing to gain by pushing further. An older sweep
+             // checked a known sector's checksum at each rate and found 99.6k,
              // 391k, 1.47M, 2.78M, 5.0M and 8.33M all good, 12.5M and 25M bad.
              //
              // Re-measure with SWEEP_ENABLE before changing this number. Bad
@@ -60,16 +59,22 @@ module top #(
              //
              // 391 kHz rather than the 758 kHz that also passed: writes are
              // rare here and margin is worth more than write throughput.
+             //
+             // That's the ULX3S harness. r2 passed every rate up to 25 MHz,
+             // so its build sets this to 2, the read rate (R2PARAMS in the
+             // Makefile).
              parameter integer SD_DIV_WRITE = 63,
              // Set 0 in simulation to bypass the PLL, which iverilog does not
              // model.
              parameter         USE_PLL     = 1'b1,
-             // The clock sweep is a MEASUREMENT TOOL, not something to run
-             // every boot. It deliberately drives the card at rates that fail,
-             // and a read that dies mid-block leaves the card stuck until it
-             // is physically reinserted. Its result is recorded on SD_DIV_FAST
-             // above; turn this back on only to re-measure after a wiring
-             // change.
+             // The clock sweep (src/sd_sweep.v) is a MEASUREMENT TOOL, not
+             // something to run every boot. It drives the card at rates that
+             // fail, and a transfer that dies mid-block can leave the card
+             // stuck until it's reinserted. It also writes to sectors in the
+             // gap before the first partition. Its results go out on the JTAG
+             // debug register, so it needs JTAG_DEBUG too: `make
+             // r2-sweep-prog`. The numbers it found are on SD_DIV_FAST and
+             // SD_DIV_WRITE above.
              parameter         SWEEP_ENABLE = 1'b0,
 
              // Blocks the image file holds. 65024 ($FE00, 31.75MB) is the size
@@ -424,7 +429,7 @@ module top #(
       if (STREAM_ENABLE) begin : g_stream
          block_stream #(.CLK_HZ(CLK_HZ), .DWELL_US(STREAM_DWELL_US),
                         .BLOCK(STREAM_BLOCK)) u_str (
-                                                     .clk(clk_sys), .rst(rst), .enable(selftest_done & selftest_ok),
+                                                     .clk(clk_sys), .rst(rst), .enable(selftest_done & selftest_ok & sw_clear),
                                                      .blk_addr(str_blk_addr), .blk_rd(str_blk_rd), .blk_ready(blk_ready),
                                                      .buf_addr(str_buf_addr), .buf_rdata(buf_rdata),
                                                      .drive_en(str_drive_en), .drive_data(str_data),
@@ -1025,82 +1030,34 @@ module top #(
       end
    end
 
-   // ---- SPI clock ceiling sweep --------------------------------------------
-   // The card is up at 100 kHz. Find the real limit instead of guessing it.
-   //
-   // Read the SAME sector at each rate and compare a checksum against the one
-   // taken at the slowest rate, which is known good. That tests the data, not
-   // just whether the command completed: a link that returns a sector with two
-   // bits wrong passes a "did it error" test and fails this one.
-   //
-   // A phase lasts DIV+1 cycles, so the bit rate is 50e6 / (2*(DIV+1)); mind
-   // the +1. The table reaches DIV=0, which is 25 MHz, the SD SPI ceiling.
-   //
-   //   index    0     1     2      3      4      5      6      7
-   //   DIV    250    63    16      8      4      2      1      0
-   //   rate  99.6k  391k  1.47M  2.78M  5.0M   8.3M  12.5M   25M
-   reg [7:0] sd_speed;
-   reg [2:0] sw_i;
-   reg [7:0] sw_pass;               // bitmask: which rates returned good data
-   reg [2:0] sw_best;
-   reg       sw_run, sw_done, sw_busy;
-   reg [15:0] sw_ck, sw_ref;
-   reg        sw_want;
-   wire       sw_fire = sw_want && (sd_dbg == SD_S_READY);
+   // ---- SD clock ceiling sweep (SWEEP_ENABLE builds only) -----------------
+   // src/sd_sweep.v measures how fast this board's card runs, for reads and
+   // for writes, before anything else touches the card. Results go out on
+   // the JTAG debug register. Everything that would use the card waits for
+   // it (sw_clear).
+   wire        sw_rd, sw_wr, sw_active, sw_done;
+   wire [31:0] sw_lba, sw_status, sw_part;
+   wire [7:0]  sw_speed, sw_wspeed, sw_wdata;
+   wire [255:0] sw_wres, sw_rres;
+   wire        sw_clear = !SWEEP_ENABLE || sw_done;
 
-   function [7:0] speed_of(input [2:0] i);
-      case (i)
-        3'd0: speed_of = 8'd250; 3'd1: speed_of = 8'd63;
-        3'd2: speed_of = 8'd16;  3'd3: speed_of = 8'd8;
-        3'd4: speed_of = 8'd4;   3'd5: speed_of = 8'd2;
-        3'd6: speed_of = 8'd1;   default: speed_of = 8'd0;
-      endcase
-   endfunction
-
-   always @(posedge clk_sys) begin
-      if (sw_fire) sw_want <= 1'b0;
-      if (rst) begin
-         sd_speed <= SD_DIV_FAST[7:0];   // start where the parameter says, not
-         // where the sweep table happens to begin
-         sw_i <= 0; sw_pass <= 0; sw_best <= 0;
-         sw_run <= 1'b0; sw_done <= 1'b0; sw_busy <= 1'b0; sw_ck <= 0; sw_ref <= 0;
-         sw_want <= 1'b0;
-      end else if (!sw_run) begin
-         // start once the self-test has finished and the card is known good
-         if (SWEEP_ENABLE && selftest_done && selftest_ok) begin
-            sw_run   <= 1'b1;
-            sw_i     <= 0;
-            sd_speed <= speed_of(3'd0);
-            sw_ck    <= 0;
-            sw_busy  <= 1'b1;
-            sw_want  <= 1'b1;
-         end
-      end else if (!sw_done) begin
-         if (sw_busy) begin
-            if (sd_buf_we) sw_ck <= {sw_ck[14:0], sw_ck[15]} + sd_buf_wdata;
-            if (sd_done) begin
-               sw_busy <= 1'b0;
-               if (sw_i == 3'd0) begin
-                  sw_ref  <= sw_ck;               // the reference, at 100 kHz
-                  sw_pass <= 8'd1;
-                  sw_best <= 3'd0;
-               end else if (!sd_err && sw_ck == sw_ref) begin
-                  sw_pass <= sw_pass | (8'd1 << sw_i);
-                  sw_best <= sw_i;
-               end
-            end
-         end else if (sw_i == 3'd7) begin
-            sw_done  <= 1'b1;
-            sd_speed <= speed_of(sw_best);      // settle at the fastest good rate
-         end else begin
-            sw_i     <= sw_i + 3'd1;
-            sd_speed <= speed_of(sw_i + 3'd1);
-            sw_ck    <= 0;
-            sw_busy  <= 1'b1;
-            sw_want  <= 1'b1;
-         end
-      end
-   end
+   generate if (SWEEP_ENABLE) begin : g_sweep
+      sd_sweep u_sweep (
+                        .clk(clk_sys), .rst(rst), .start(selftest_done & selftest_ok),
+                        .engine_ready(sd_dbg == SD_S_READY), .sd_done(sd_done), .sd_err(sd_err),
+                        .sd_err_code(sd_err_code), .sd_retries(sd_retries),
+                        .rd(sw_rd), .wr(sw_wr), .lba(sw_lba), .speed(sw_speed), .wspeed(sw_wspeed),
+                        .buf_we(sd_buf_we), .buf_addr(sd_buf_addr), .buf_wdata(sd_buf_wdata),
+                        .wdata(sw_wdata), .active(sw_active), .done(sw_done),
+                        .status(sw_status), .part_lba(sw_part), .wres(sw_wres), .rres(sw_rres));
+   end else begin : g_no_sweep
+      assign sw_rd = 1'b0;        assign sw_wr = 1'b0;
+      assign sw_active = 1'b0;    assign sw_done = 1'b0;
+      assign sw_lba = 32'd0;      assign sw_status = 32'd0;
+      assign sw_part = 32'd0;     assign sw_speed = 8'd0;
+      assign sw_wspeed = 8'd0;    assign sw_wdata = 8'd0;
+      assign sw_wres = 256'd0;    assign sw_rres = 256'd0;
+   end endgenerate
 
    // ---- USB serial receive + raw SD provisioning --------------------------
    // One uart_rx feeds both the 'I' image-select parser (in g_fs below) and the
@@ -1141,48 +1098,51 @@ module top #(
                  .u_req(up_req), .u_fire(up_fire), .u_done(up_done), .u_err(up_err),
                  .own_fs(sd_own_fs), .own_up(sd_own_up));
 
-   sd_spi #(.CLK_HZ(CLK_HZ), .DIV_INIT(SD_DIV_INIT), .DIV_FAST(SD_DIV_FAST),
-            .DIV_WRITE(SD_DIV_WRITE)) u_sd (
-                                            .clk(clk_sys), .rst(rst),
-                                            .rd(prov_rd | r_fire_rd | (rq_fire && !rq_wr) | sw_fire | ver_fire
-                                                | (fs_fire && !fs_req_wr) | up_fire),
-                                            .wr(prov_wr | r_fire_wr | (rq_fire && rq_wr) | (fs_fire && fs_req_wr)), .speed(sd_speed),
-                                            .lba(prov_active ? prov_lba
-                                                 : rq_fire  ? rq_lba
-                                                 : (r_fire_rd || r_fire_wr) ? sd_lba
-                                                 : fs_fire  ? fs_lba
-                                                 : up_fire  ? up_lba
-                                                 : ver_fire ? ver_lba
-                                                 : (sw_run && !sw_done) ? 32'd0 : sd_lba),
-                                            .done(sd_done), .err(sd_err),
-                                            .buf_addr(sd_buf_addr), .buf_wdata(sd_buf_wdata), .buf_we(sd_buf_we),
-                                            // During the write test sd_spi
-                                            // sources the pattern, not the
-                                            // block RAM. GATED ON wtest_run,
-                                            // and that matters: fstage stops at
-                                            // 5 when the self-test finishes
-                                            // rather than advancing past it, so
-                                            // keying off fstage alone would
-                                            // leave this stuck on the
-                                            // constant-zero source forever.
-                                            //
-                                            // The filesystem sources its own
-                                            // writes (persisting a selection)
-                                            // from its sector buffer, not from
-                                            // the block buffer. OWNER-keyed,
-                                            // not request-keyed: keying on the
-                                            // request would let a persist write
-                                            // PENDING during a host write flip
-                                            // the data source mid-sector.
-                                            .buf_rdata(prov_active         ? prov_rdata
-                                                       : sd_own_fs           ? fs_wr_data
-                                                       : !wtest_run        ? ram_rdata
-                                                       : (fstage == 3'd3)  ? wpat(sd_buf_addr)
-                                                       : (fstage == 3'd5)  ? 8'h00
-                                                       : ram_rdata),
-                                            .sd_clk(sd_clk_i), .sd_cs_n(sd_cs_n_i), .sd_mosi(sd_mosi_i), .sd_miso(sd_miso),
-                                            .ready(sd_ready), .err_code(sd_err_code), .dbg_state(sd_dbg),
-                                            .dbg_cmd(sd_dbg_cmd), .dbg_retries(sd_retries), .dbg_fast(sd_fast));
+   sd_spi #(.CLK_HZ(CLK_HZ), .DIV_INIT(SD_DIV_INIT),
+            .DIV_FAST(SD_DIV_FAST)) u_sd (
+                                          .clk(clk_sys), .rst(rst),
+                                          .rd(prov_rd | r_fire_rd | (rq_fire && !rq_wr) | sw_rd | ver_fire
+                                              | (fs_fire && !fs_req_wr) | up_fire),
+                                          .wr(prov_wr | r_fire_wr | (rq_fire && rq_wr) | (fs_fire && fs_req_wr) | sw_wr),
+                                          .speed(sw_active ? sw_speed : SD_DIV_FAST[7:0]),
+                                          .wspeed(sw_active ? sw_wspeed : SD_DIV_WRITE[7:0]),
+                                          .lba(prov_active ? prov_lba
+                                               : rq_fire  ? rq_lba
+                                               : (r_fire_rd || r_fire_wr) ? sd_lba
+                                               : fs_fire  ? fs_lba
+                                               : up_fire  ? up_lba
+                                               : ver_fire ? ver_lba
+                                               : sw_active ? sw_lba : sd_lba),
+                                          .done(sd_done), .err(sd_err),
+                                          .buf_addr(sd_buf_addr), .buf_wdata(sd_buf_wdata), .buf_we(sd_buf_we),
+                                          // During the write test sd_spi
+                                          // sources the pattern, not the
+                                          // block RAM. GATED ON wtest_run,
+                                          // and that matters: fstage stops at
+                                          // 5 when the self-test finishes
+                                          // rather than advancing past it, so
+                                          // keying off fstage alone would
+                                          // leave this stuck on the
+                                          // constant-zero source forever.
+                                          //
+                                          // The filesystem sources its own
+                                          // writes (persisting a selection)
+                                          // from its sector buffer, not from
+                                          // the block buffer. OWNER-keyed,
+                                          // not request-keyed: keying on the
+                                          // request would let a persist write
+                                          // PENDING during a host write flip
+                                          // the data source mid-sector.
+                                          .buf_rdata(prov_active         ? prov_rdata
+                                                     : sw_active           ? sw_wdata
+                                                     : sd_own_fs           ? fs_wr_data
+                                                     : !wtest_run        ? ram_rdata
+                                                     : (fstage == 3'd3)  ? wpat(sd_buf_addr)
+                                                     : (fstage == 3'd5)  ? 8'h00
+                                                     : ram_rdata),
+                                          .sd_clk(sd_clk_i), .sd_cs_n(sd_cs_n_i), .sd_mosi(sd_mosi_i), .sd_miso(sd_miso),
+                                          .ready(sd_ready), .err_code(sd_err_code), .dbg_state(sd_dbg),
+                                          .dbg_cmd(sd_dbg_cmd), .dbg_retries(sd_retries), .dbg_fast(sd_fast));
 
 
    wire [9:0] rpt_addr;
@@ -1469,7 +1429,7 @@ module top #(
 
          fat32 #(.MAX_CLUSTERS(FS_MAX_CLUSTERS), .DIR_NAME(FS_DIR),
                  .AUTOPICK(FS_AUTOPICK), .RECURSE(FS_RECURSE)) u_fs (
-                                                                     .clk(clk_sys), .rst(rst), .start(selftest_done & selftest_ok),
+                                                                     .clk(clk_sys), .rst(rst), .start(selftest_done & selftest_ok & sw_clear),
                                                                      .reselect(resel_p), .resel_idx(resel_idx_r),
                                                                      .host_quiet(host_quiet), .nopersist(resel_nopersist),
                                                                      .req(fs_req), .fire(fs_fire),
@@ -1654,7 +1614,7 @@ module top #(
          verifier #(.CLK_HZ(CLK_HZ), .START(VERIFY_START), .COUNT(VERIFY_COUNT),
                     .STRIDE(VERIFY_STRIDE)) u_verify (
                                                       .clk(clk_sys), .rst(rst),
-                                                      .enable(1'b1), .go(selftest_done & selftest_ok),
+                                                      .enable(1'b1), .go(selftest_done & selftest_ok & sw_clear),
                                                       .req(ver_req), .fire(ver_fire),
                                                       .sd_done(sd_done), .sd_err(sd_err), .sd_err_code(sd_err_code),
                                                       .sd_retries(sd_retries),
@@ -1812,7 +1772,7 @@ module top #(
    end endgenerate
 
    // ---- the JTAG debug register (JTAG_DEBUG builds only) --------------------
-   // 512 bits on ER1 (IR 0x32), captured in Capture-DR and shifted out LSB
+   // 512 bits (768 with the sweep) on ER1 (IR 0x32), captured in Capture-DR and shifted out LSB
    // first. Word 0 and word 15 are fixed markers, so a reader can find the
    // frame however many bits the TAP adds in front. The SD engine's error
    // code is latched when an updater read fails, since a later request would
@@ -1838,20 +1798,45 @@ module top #(
       //    5  cur_clus              13  fs_err, fs_ready, progress
       //    6  ret, fat_ret, sec     14  BUILD_ID
       //    7  spc_log               15  "END!"
+      //
+      // A SWEEP_ENABLE build sends 24 words instead, starting "PESW":
+      //    0  "PESW"                 4  to 11  write results, rates 0 to 7
+      //    1  sweep status          12  to 19  read results, rates 0 to 7
+      //    2  partition start LBA   20  SD code now, retries, SD state
+      //    3  BUILD_ID              21, 22  zero
+      //                             23  "END!"
+      // src/sd_sweep.v has the layout of the status and result words.
+      localparam integer JW = SWEEP_ENABLE ? 768 : 512;
       wire jtck, jtdi, jshift, jce1;
-      wire [511:0] snap = {32'h454E4421, BUILD_ID,
-                           8'd0, fs_err, 3'd0, fs_ready, upd_progress,
-                           upd_fires, upd_dones,
-                           4'd0, upd_sd_code, 4'd0, sd_err_code, sd_retries, 3'd0, sd_dbg,
-                           fs_data_start, fs_dbg_fat_start, fs_root_clus,
-                           24'd0, 4'd0, fs_spc_log,
-                           upd_dbg, up_lba,
-                           4'd0, upd_err, 3'd0, upd_state, upd_run_slot, 6'd0, upd_phase,
-                           32'h50454442};
-      reg [511:0] sr;
+      wire [767:0] sweep_snap = {32'h454E4421, 64'd0,
+                                 8'd0, 4'd0, sd_err_code, sd_retries, 3'd0, sd_dbg,
+                                 sw_rres, sw_wres, BUILD_ID, sw_part, sw_status,
+                                 32'h50455357};
+      wire [511:0] dbg_snap = {32'h454E4421, BUILD_ID,
+                               8'd0, fs_err, 3'd0, fs_ready, upd_progress,
+                               upd_fires, upd_dones,
+                               4'd0, upd_sd_code, 4'd0, sd_err_code, sd_retries, 3'd0, sd_dbg,
+                               fs_data_start, fs_dbg_fat_start, fs_root_clus,
+                               24'd0, 4'd0, fs_spc_log,
+                               upd_dbg, up_lba,
+                               4'd0, upd_err, 3'd0, upd_state, upd_run_slot, 6'd0, upd_phase,
+                               32'h50454442};
+      wire [JW-1:0] snap = SWEEP_ENABLE ? sweep_snap[JW-1:0] : dbg_snap;
+      // JCE1 and JSHIFT change on the rising edge of JTCK, and they reach
+      // sr through ordinary routing while JTCK takes the global network.
+      // Acting on them at that same edge races: some bits would capture
+      // while others shifted. So we sample them on the falling edge and act
+      // at the next rising edge, the way a TAP times Capture-DR and
+      // Shift-DR. The TAP retimes JTDO1 onto TDO itself.
+      reg           cap_q, sh_q;
+      always @(negedge jtck) begin
+         cap_q <= jce1 && !jshift;
+         sh_q  <= jce1 && jshift;
+      end
+      reg [JW-1:0]  sr;
       always @(posedge jtck) begin
-         if (jce1 && !jshift) sr <= snap;
-         else if (jce1)       sr <= {jtdi, sr[511:1]};
+         if (cap_q)     sr <= snap;
+         else if (sh_q) sr <= {jtdi, sr[JW-1:1]};
       end
       JTAGG u_jtag (.JTDO1(sr[0]), .JTDO2(1'b0), .JTDI(jtdi), .JTCK(jtck),
                     .JSHIFT(jshift), .JCE1(jce1), .JCE2(), .JRTI1(), .JRTI2(),

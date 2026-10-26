@@ -46,7 +46,7 @@ module tb_sd #(parameter integer SKEW = 0, parameter V1 = 1'b0,
    // is exercised, just not for the full 400 kHz worth of wall clock.
    sd_spi #(.DIV_INIT(8), .DIV_FAST(2), .RETRY_MAX(RETRIES),
             .TOKEN_TIMEOUT_CYC(20_000)) dut (
-                                             .clk(clk), .rst(rst),
+                                             .clk(clk), .rst(rst), .wspeed(8'd63),
                                              .rd(rd), .wr(wr), .lba(lba), .done(done), .err(err),
                                              .buf_addr(buf_addr), .buf_wdata(buf_wdata), .buf_we(buf_we),
                                              .buf_rdata(wbuf_q),

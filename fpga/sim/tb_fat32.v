@@ -58,7 +58,7 @@ module tb_fat32 #(parameter AUTO = 1'b1, parameter NOCFG = 1'b0,
    // dangling it is z and the divider is loaded with x once the card is up.
    sd_spi #(.DIV_INIT(8), .DIV_FAST(2), .TOKEN_TIMEOUT_CYC(200_000)) u_sd (
                                                                            .clk(clk), .rst(rst),
-                                                                           .speed(8'd2),
+                                                                           .speed(8'd2), .wspeed(8'd63),
                                                                            .rd(f_fire && !f_req_wr), .wr(f_fire && f_req_wr), .lba(f_lba),
                                                                            .done(sd_done), .err(sd_err),
                                                                            .buf_addr(sd_wbuf_addr), .buf_wdata(sd_buf_wdata), .buf_we(sd_buf_we),

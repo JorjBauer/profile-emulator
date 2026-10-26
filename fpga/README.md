@@ -124,9 +124,10 @@ and never asks again. Two things changed, both only for r2:
   it's fine now that the socket is on the board rather than on flying leads.
   The first read also happens at this rate, so it's faster too.
 
-Reads after that stay at 8.33 MHz, which is the last rate measured to work on
-the old harness. r2 hasn't been swept yet (`SWEEP_ENABLE`), so it may well go
-faster.
+After that, reads and writes both run at 8.33 MHz. The ULX3S harness kept
+writes at 391 kHz, but the first r2 board passed every rate up to 25 MHz
+(see "Measuring an r2 board's SD clock ceilings"), so r2 writes at the read
+rate. 8.33 MHz is a third of what the board was shown to do.
 
 The FAT32 directory recursion is still on. It costs boot time when the card
 holds a lot of files, which is why the images belong in `HD`.
@@ -764,6 +765,7 @@ them.
 | `sim-v1skew` | the real card's combination, v1 behavior AND a skewed reply |
 | `sim-retry` | a card that rejects two reads: absorbed with no error reaching the host, at a cost of exactly two retries |
 | `sim-retry-exhaust` | a card that rejects five: gives up cleanly after three, because an unbounded retry turns a card that has stopped answering into a hang |
+| `sim-sd-sweep` | the clock sweep against a card stub that goes bad above a chosen rate: the ceilings it finds, a rate failed on retries alone, writes that never land, and no write at all to a card whose gap isn't blank, a GPT card, or a partition too low |
 
 **The filesystem**
 
@@ -811,17 +813,47 @@ do not run at the same rate and the difference is not subtle:
 | read  | pass | pass | pass | pass | pass | pass | pass | fail |
 | write | pass | pass | pass | fail | fail | fail | fail | fail |
 
-Reads are verified by checksum against a known sector at every rate, writes by
+Reads were verified by checksum against a known sector at every rate, writes by
 writing a known-free block, reading it back and comparing all 512 bytes. The
 asymmetry is the diagnosis. A read puts six command bytes on MOSI and a write
 puts 512 back to back, so a write is the only thing that really exercises MOSI
 integrity. This harness is flying leads through series resistors. Treat it
 as a wiring limit rather than a protocol one. The settings are
-`SD_DIV_FAST` and `SD_DIV_WRITE` in `src/top.v`; re-measure with `SWEEP_ENABLE`
-before changing either.
+`SD_DIV_FAST` and `SD_DIV_WRITE` in `src/top.v`.
 
-This should go away with the manufactured PCBs. As of this writing r2 hasn't
-been swept, so it still uses the harness's numbers.
+On r2 it went away. The first r2 board, swept on 2026-10-25, passed every
+rate up to 25 MHz for both reads and writes, with no retries, so r2 writes
+at 8.33 MHz (`SD_DIV_WRITE` 2 in `R2PARAMS`). 25 MHz is as fast as the
+engine can clock the card, so the board's real ceiling is somewhere above
+that.
+
+### Measuring an r2 board's SD clock ceilings
+
+The sweep build measures both ceilings on a real board. It loads into SRAM
+only, so the flash isn't touched:
+
+```
+make r2-sweep-prog      # with the //e disconnected and a card in
+make r2-sweep-read      # under a minute later; an early read says "still running"
+```
+
+It writes to the card, so know where. It takes 33 sectors from the gap
+between the MBR and the first partition (a card from the SD Association's
+formatter starts its partition at sector 8192, and the gap is empty), and
+only if all 33 read back as zeros first. A GPT card, or a partition that
+starts below sector 64, gets no writes at all. Zeros go back at the end.
+
+For each of eight rates from 391 kHz to 25 MHz it writes all 32 data sectors
+and reads each one back at 391 kHz, then reads the 32 sectors four times at
+each rate, comparing every byte. Each sweep stops after the first rate that
+fails, because a card that fails mid-transfer can stay hung until it's
+reinserted. A rate that needed retries but returned the right data is
+reported as a failure too, since the retries would hide it from the //e.
+`src/sd_sweep.v` has the details, and `make sim-sd-sweep` tests it against a
+card stub that goes bad above a chosen rate.
+
+The rates in the table above came from the older sweep, which read sector 0
+once at each rate and measured writes by hand.
 
 ### The first bench test: the SD card, with no host at all
 
@@ -871,7 +903,8 @@ moves to the rates in the table further up: 8.33 MHz for reads, 391 kHz for
 writes. Those were measured on the ULX3S harness, where the socket was
 off-board on flying leads through 33R series resistors, which is the most
 likely reason writes stop an order of magnitude below reads. r2 has its socket
-on the board and still uses the same rates, because it hasn't been swept.
+on the board and writes at 8.33 MHz too (see "Measuring an r2 board's SD
+clock ceilings").
 
 ### The other bench test: the reader, not the //e
 

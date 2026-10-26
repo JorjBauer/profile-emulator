@@ -62,7 +62,7 @@ SRC     := src/top.v src/profile_bus.v src/profile_target.v src/sd_spi.v \
            src/block_router.v src/spare_table.v src/geometry.v src/verifier.v \
            src/bus_exercise.v src/block_stream.v src/fat32.v src/selector.v \
            src/uart_tx.v src/uart_rx.v src/reporter.v src/bus_capture.v src/sd_arb.v src/usb_prov.v \
-           src/spi_flash.v src/fw_update.v
+           src/spi_flash.v src/fw_update.v src/sd_sweep.v
 
 # The parameters every ULX3S build carries.
 #
@@ -396,6 +396,10 @@ sim-fw-update: sim/tb_fw_update.v src/fw_update.v src/spi_flash.v
 	  sim/tb_fw_update.v src/fw_update.v src/spi_flash.v
 	vvp $(SIMBIN)_fwu | $(SIMCHECK)
 
+sim-sd-sweep: sim/tb_sd_sweep.v src/sd_sweep.v
+	iverilog -g2012 -o $(SIMBIN)_swp -s tb_sd_sweep sim/tb_sd_sweep.v src/sd_sweep.v
+	vvp $(SIMBIN)_swp | $(SIMCHECK)
+
 sim-selector: sim/tb_selector.v src/selector.v $(BLOBS)
 	iverilog -g2012 -o $(SIMBIN)_sel -s tb_selector sim/tb_selector.v src/selector.v
 	vvp $(SIMBIN)_sel | $(SIMCHECK)
@@ -436,7 +440,7 @@ sim-v1skew: sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	  sim/tb_sd.v sim/sd_model.v src/sd_spi.v
 	vvp $(SIMBIN)_v1s | $(SIMCHECK)
 
-sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-fw-update
+sim-all: sim sim-iie sim-iie-32mb sim-sd sim-geom sim-verify sim-verify-stride sim-retry sim-retry-exhaust sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-fw-update sim-sd-sweep
 
 # ---- the r2 board (hw-r2/) -------------------------------------------------
 # The same design again, wrapped in src/top_r2.v for the three pins r2 added
@@ -465,11 +469,15 @@ R2CABLE  ?= ft4232
 # That is just under the spec's 400 kHz for initialization. The faster rate is
 # safe because the socket is on the board now, not on flying leads. The first
 # read also stays at this initialization rate.
-# Reads after it stay at 8.33 MHz, the last rate measured to return correct
-# data. Re-measure with SWEEP_ENABLE before raising that.
+#
+# After that, reads and writes both run at 8.33 MHz (DIV 2). The ULX3S
+# harness kept writes at 391 kHz, but the first r2 board passed every rate
+# up to 25 MHz both ways (`make r2-sweep-prog`, 2026-10-25), so 8.33 MHz is
+# a third of what it's shown to do. A write at 391 kHz took about 10.5 ms,
+# longer than the //e spends on a block.
 #
 # UPDATE_ENABLE builds in the SD firmware update (src/fw_update.v).
-R2PARAMS := -set SD_DIV_INIT 62 -set UPDATE_ENABLE 1
+R2PARAMS := -set SD_DIV_INIT 62 -set SD_DIV_WRITE 2 -set UPDATE_ENABLE 1
 $(R2PROJ).bit: FLASHFREQ := 62.0
 
 # ---- the r2 flash: two images and a jump record ------------------------------
@@ -514,6 +522,19 @@ $(eval $(call ECP5_BUILD,$(R2DPROJ),$(R2PARAMS) -set JTAG_DEBUG 1,$(R2LPF),$(R2P
 
 r2-debug-prog: $(R2DPROJ)_nextflash.bit
 	openFPGALoader -c $(R2CABLE) $<
+
+# The r2 build plus the SD clock sweep (SWEEP_ENABLE, src/sd_sweep.v), SRAM
+# only. It writes to 33 sectors in the gap before the card's first
+# partition, and it waits for nothing: run it with the //e disconnected.
+# It takes under a minute. Then `make r2-sweep-read` prints the results.
+R2SPROJ := profile_emu_r2swp
+$(eval $(call ECP5_BUILD,$(R2SPROJ),$(R2PARAMS) -set JTAG_DEBUG 1 -set SWEEP_ENABLE 1,$(R2LPF),$(R2PKG),src/top_r2.v,top_r2))
+
+r2-sweep-prog: $(R2SPROJ)_nextflash.bit
+	openFPGALoader -c $(R2CABLE) $<
+
+r2-sweep-read:
+	openocd -f tools/ecp5_er1.cfg 2>&1 | node tools/sweep_decode.js
 
 r2-prog: $(R2PROJ)_nextflash.bit
 	openFPGALoader -c $(R2CABLE) $<
@@ -602,9 +623,9 @@ clean:
 	rm -f $(CLEANFILES) $(BLOBS) .build_id
 
 .PHONY: all blobs prog reload flash stat ecp5 ecp5-prog ecp5-reload ecp5-flash ecp5-stat \
-        r2 r2-prog r2-reload r2-flash r2-flash-dual r2-update r2-debug-prog \
+        r2 r2-prog r2-reload r2-flash r2-flash-dual r2-update r2-debug-prog r2-sweep-prog r2-sweep-read \
         sim sim-iie sim-iie-late sim-iie-fast sim-iie-32mb sim-sd sim-geom sim-verify \
         sim-verify-stride sim-retry sim-retry-exhaust sim-usb-prov sim-router-race \
         sim-exercise sim-fat32 sim-fat32-flat sim-fat32-noauto sim-fat32-83 sim-fat32-persist sim-fat32-lru \
-        sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-fw-update sim-all \
+        sim-selector sim-unit sim-skew sim-sweep sim-v1 sim-v1skew sim-fw-update sim-sd-sweep sim-all \
         verify-bit verify-prog dump-prog exercise-prog stream-prog clean

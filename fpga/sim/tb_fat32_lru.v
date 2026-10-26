@@ -40,7 +40,7 @@ module tb_fat32_lru;
    wire f_fire = f_req && (sd_dbg == SD_S_READY);
 
    sd_spi #(.DIV_INIT(8), .DIV_FAST(2), .TOKEN_TIMEOUT_CYC(200_000)) u_sd (
-                                                                           .clk(clk), .rst(rst),
+                                                                           .clk(clk), .rst(rst), .wspeed(8'd63),
                                                                            .rd(f_fire && !f_req_wr), .wr(f_fire && f_req_wr), .lba(f_lba),
                                                                            .done(sd_done), .err(sd_err),
                                                                            .buf_addr(sd_wbuf_addr), .buf_wdata(sd_buf_wdata), .buf_we(sd_buf_we),

@@ -17,12 +17,10 @@
 // remains for serving a raw image at a fixed offset with the
 // filesystem compiled out.
 //
-// Clocking. One divider, several speeds, all set from top.v rather
-// than from the defaults on the parameters below: 100 kHz while the
-// card is brought up, then 8.33 MHz for reads and 391 kHz for
-// writes. Those two are measured ceilings on this harness, which
-// should be fixed on a production PCB. Re-measure with SWEEP_ENABLE
-// before changing either.
+// Clocking. One divider, several speeds: DIV_INIT while the card is
+// brought up, then whatever top.v puts on `speed` for reads and on
+// `wspeed` for writes. They're ports so src/sd_sweep.v can change them
+// at run time. top.v has the measured rates.
 //
 // SPI mode 0: MOSI is set up while SCLK is low, the card samples on
 // the rising edge, and we sample MISO on that same rising edge.
@@ -35,12 +33,7 @@ module sd_spi #(
                 parameter integer DIV_INIT = 250,   // half-period in clocks: 100 kHz at 50 MHz
                 parameter integer DIV_FAST = 2,     // UNUSED: the post-init rate arrives on the
                 // `speed` port at run time (top.v drives it from
-                // SD_DIV_FAST).  Nothing here reads this. Writes get
-                // their own divider. A read puts six command bytes on
-                // MOSI. A write puts 512 back to back, so MOSI is
-                // exercised far harder and may fail at a rate that
-                // works for reads.
-                parameter integer DIV_WRITE = 63,
+                // SD_DIV_FAST).  Nothing here reads this.
                 // How long to wait for the $FE data token, in CLOCK
                 // CYCLES rather than in byte times. The SD spec
                 // allows a card up to 100 ms of read access time
@@ -87,6 +80,7 @@ module sd_spi #(
                    input  wire        wr,              // pulse: write the buffer to `lba`
                    input  wire [31:0] lba,
                    input  wire [7:0]  speed,        // SPI half-period once the card is up
+                   input  wire [7:0]  wspeed,       // the same, for writes
                    output reg         done,            // one-cycle pulse: request finished
                    output reg         err,             // sticky for this request; see err_code
 
@@ -761,7 +755,7 @@ module sd_spi #(
                        retries    <= RETRY_MAX[3:0];
                        retry_pend <= 1'b0;
                        if (wr) begin
-                          div     <= fast_en ? DIV_WRITE[7:0] : DIV_INIT[7:0];
+                          div     <= fast_en ? wspeed : DIV_INIT[7:0];
                           sd_cs_n <= 1'b0;
                           cmd_num <= 6'd24;
                           cmd_arg <= ccs ? (lba + LBA_OFF[31:0])
