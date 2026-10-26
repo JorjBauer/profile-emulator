@@ -7,7 +7,6 @@ profile_emu_*.config
 profile_emu_*.bit
 profile_emu_*.bin
 *.buildid
-R2UPDATE.BIN
 *.bit.cfg
 # Editor backups
 *~
